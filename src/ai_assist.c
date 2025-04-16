@@ -7,6 +7,8 @@
 #include "task.h"
 #include "storage.h"
 
+#define AI_SMART_ADD_DEBUG 0
+
 struct curl_mem {
     char *ptr;
     size_t len;
@@ -22,47 +24,47 @@ static size_t write_cb(void *data, size_t size, size_t nmemb, void *userp) {
     return realsize;
 }
 
-void ai_smart_add(const char *prompt) {
-    fprintf(stderr, "[ai_smart_add] Called with prompt: %s\n", prompt);
+void ai_smart_add(const char *prompt, int debug) {
+    if (debug) fprintf(stderr, "[ai_smart_add] Called with prompt: %s\n", prompt);
     const char *api_key = getenv("OPENAI_API_KEY");
     if (!api_key) {
-        fprintf(stderr, "OPENAI_API_KEY not set\n");
+        if (debug) fprintf(stderr, "OPENAI_API_KEY not set\n");
         exit(1);
     }
     // Compose system prompt
     const char *sys =
-"Persona\\n\\n"
-"You are the AI engine powering a smart Todo CLI application.\\n\\n"
-"Instructions\\n"
-"- Input: A user’s natural‑language todo description.\\n"
-"- Output: A single JSON object only, with no extra text or explanation.\\n"
-"- Schema:\\n"
-"  - id (string): a newly generated GUID (e.g. \\\"a18fb3d8‑68f9‑4760‑97e4‑bc932e8d8821\\\")\\n"
-"  - name (string): the task description\\n"
-"  - created (string): current UTC timestamp in ISO 8601 (e.g. \\\"2025-04-16T20:40:00Z\\\")\\n"
-"  - due (string): ISO 8601 UTC timestamp if a due date exists, else an empty string\\n"
-"  - tags (array of strings): any labels mentioned\\n"
-"  - priority (string): one of \\\"low\\\", \\\"medium\\\", or \\\"high\\\"\\n"
-"  - status (string): either \\\"pending\\\" or \\\"done\\\"\\n"
-"- Parsing rules:\\n"
-"  - Interpret “today” or “tomorrow” as due dates (due), using the user’s locale.\\n"
-"  - Treat “urgent,” “now,” or “immediately” as priority: \\\"high\\\".\\n"
-"  - If no due date is specified, set due to \\\"\\\".\\n"
-"  - Always set created to the moment the JSON is generated.\\n\\n"
-"Context\\n\\n"
-"Example\\n"
-"- Input:\\n"
-"Play with newest OpenAI models for coding, tag as AI Learning, due next week, urgent\\n\\n"
-"- Output:\\n"
-"{\\n"
-"  \\\"id\\\": \\\"a18fb3d8-68f9-4760-97e4-bc932e8d8821\\\",\\n"
-"  \\\"name\\\": \\\"Play with newest OpenAI models for coding\\\",\\n"
-"  \\\"created\\\": \\\"2025-04-16T20:40:00Z\\\",\\n"
-"  \\\"due\\\": \\\"2025-04-23T00:00:00Z\\\",\\n"
-"  \\\"tags\\\": [\\\"AI\\\", \\\"Learning\\\"],\\n"
-"  \\\"priority\\\": \\\"high\\\",\\n"
-"  \\\"status\\\": \\\"pending\\\"\\n"
-"}\\n";
+"Persona\n\n"
+"You are the AI engine powering a smart Todo CLI application.\n\n"
+"Instructions\n"
+"- Input: A user’s natural‑language todo description.\n"
+"- Output: A single JSON object only, with no extra text or explanation.\n"
+"- Schema:\n"
+"  - id (string): a newly generated GUID (e.g. \\\"a18fb3d8‑68f9‑4760‑97e4‑bc932e8d8821\\\")\n"
+"  - name (string): the task description\n"
+"  - created (string): current UTC timestamp in ISO 8601 (e.g. \\\"2025-04-16T20:40:00Z\\\")\n"
+"  - due (string): ISO 8601 UTC timestamp if a due date exists, else an empty string\n"
+"  - tags (array of strings): any labels mentioned\n"
+"  - priority (string): one of \\\"low\\\", \\\"medium\\\", or \\\"high\\\"\n"
+"  - status (string): either \\\"pending\\\" or \\\"done\\\"\n"
+"- Parsing rules:\n"
+"  - Interpret “today” or “tomorrow” as due dates (due), using the user’s locale.\n"
+"  - Treat “urgent,” “now,” or “immediately” as priority: \\\"high\\\".\n"
+"  - If no due date is specified, set due to \\\"\\\".\n"
+"  - Always set created to the moment the JSON is generated.\n\n"
+"Context\n\n"
+"Example\n"
+"- Input:\n"
+"Play with newest OpenAI models for coding, tag as AI Learning, due next week, urgent\n\n"
+"- Output:\n"
+"{\n"
+"  \\\"id\\\": \\\"a18fb3d8-68f9-4760-97e4-bc932e8d8821\\\",\n"
+"  \\\"name\\\": \\\"Play with newest OpenAI models for coding\\\",\n"
+"  \\\"created\\\": \\\"2025-04-16T20:40:00Z\\\",\n"
+"  \\\"due\\\": \\\"2025-04-23T00:00:00Z\\\",\n"
+"  \\\"tags\\\": [\\\"AI\\\", \\\"Learning\\\"],\n"
+"  \\\"priority\\\": \\\"high\\\",\n"
+"  \\\"status\\\": \\\"pending\\\"\n"
+"}\n";
     char usermsg[512];
     snprintf(usermsg, sizeof(usermsg), "%s", prompt);
     // Build POST body
@@ -79,7 +81,7 @@ void ai_smart_add(const char *prompt) {
     cJSON_AddItemToArray(msgs, user_msg);
     cJSON_AddItemToObject(root, "messages", msgs);
     char *json_body = cJSON_PrintUnformatted(root);
-    fprintf(stderr, "[ai_smart_add] Request JSON: %s\n", json_body);
+    if (debug) fprintf(stderr, "[ai_smart_add] Request JSON: %s\n", json_body);
 
     CURL *curl = curl_easy_init();
     CURLcode res;
@@ -98,38 +100,38 @@ void ai_smart_add(const char *prompt) {
     res = curl_easy_perform(curl);
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    fprintf(stderr, "[ai_smart_add] HTTP status: %ld\n", http_code);
+    if (debug) fprintf(stderr, "[ai_smart_add] HTTP status: %ld\n", http_code);
     if (res != CURLE_OK) {
-        fprintf(stderr, "curl failed: %s\n", curl_easy_strerror(res));
+        if (debug) fprintf(stderr, "curl failed: %s\n", curl_easy_strerror(res));
         exit(1);
     }
-    fprintf(stderr, "[ai_smart_add] Raw response: %s\n", chunk.ptr);
+    if (debug) fprintf(stderr, "[ai_smart_add] Raw response: %s\n", chunk.ptr);
     // Parse response
     cJSON *resp = cJSON_Parse(chunk.ptr);
     if (!resp) {
-        fprintf(stderr, "OpenAI response not JSON. Raw: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "OpenAI response not JSON. Raw: %s\n", chunk.ptr);
         exit(1);
     }
     cJSON *choices = cJSON_GetObjectItem(resp, "choices");
     if (!choices || !cJSON_IsArray(choices)) {
-        fprintf(stderr, "No choices. Full response: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "No choices. Full response: %s\n", chunk.ptr);
         exit(1);
     }
     cJSON *msg = cJSON_GetObjectItem(cJSON_GetArrayItem(choices, 0), "message");
     if (!msg) {
-        fprintf(stderr, "No message. Full response: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "No message. Full response: %s\n", chunk.ptr);
         exit(1);
     }
     cJSON *content = cJSON_GetObjectItem(msg, "content");
     if (!content || !cJSON_IsString(content)) {
-        fprintf(stderr, "No content. Full response: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "No content. Full response: %s\n", chunk.ptr);
         exit(1);
     }
-    fprintf(stderr, "[ai_smart_add] LLM content: %s\n", content->valuestring);
+    if (debug) fprintf(stderr, "[ai_smart_add] LLM content: %s\n", content->valuestring);
     // Parse the JSON object from content
     Task *t = task_from_json(content->valuestring);
     if (!t) {
-        fprintf(stderr, "Could not parse task JSON from LLM. Content: %s\n", content->valuestring);
+        if (debug) fprintf(stderr, "Could not parse task JSON from LLM. Content: %s\n", content->valuestring);
         exit(1);
     }
     // Load, append, save
@@ -139,7 +141,7 @@ void ai_smart_add(const char *prompt) {
     tasks[count++] = t;
     tasks[count] = NULL;
     if (storage_save_tasks(tasks, count) != 0) {
-        fprintf(stderr, "Failed to save new task\n");
+        if (debug) fprintf(stderr, "Failed to save new task\n");
         exit(1);
     }
     printf("AI task added: %s\n", t->name);
