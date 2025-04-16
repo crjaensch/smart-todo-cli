@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include <curses.h>
+#include "ai_assist.h"
 #include "ui.h"
 #include "storage.h"
 #include "task.h"
@@ -36,7 +37,12 @@ static time_t parse_date(const char *s) {
     return timegm(&tm);
 }
 
-int main(void) {
+int main(int argc, char *argv[]) {
+    if (argc >= 3 && strcmp(argv[1], "ai-add") == 0) {
+        ai_smart_add(argv[2]);
+        return 0;
+    }
+
     // Initialize storage
     if (storage_init() != 0) {
         fprintf(stderr, "Failed to initialize storage.\n");
