@@ -4,12 +4,6 @@
 #include <time.h>
 #include <string.h>
 
-// Color pair definitions
-#define CP_DEFAULT    1
-#define CP_OVERDUE    2
-#define CP_APPROACH   3
-#define CP_FUTURE     4
-
 // Threshold for approaching tasks (e.g. 3 days)
 static const time_t APPROACH_THRESH = 3 * 24 * 60 * 60;
 

@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "storage.h"
 #include "task.h"
+#include "ai_chat.h"
 
 // Sort modes
 enum { BY_CREATION, BY_NAME } SortMode;
@@ -38,6 +39,9 @@ static time_t parse_date(const char *s) {
 }
 
 int main(int argc, char *argv[]) {
+    if (argc >= 2 && strcmp(argv[1], "ai-chat") == 0) {
+        return ai_chat_repl();
+    }
     if (argc >= 3 && strcmp(argv[1], "ai-add") == 0) {
         ai_smart_add_default(argv[2]);
         return 0;

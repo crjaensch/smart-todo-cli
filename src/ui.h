@@ -3,7 +3,14 @@
 #define TODO_APP_UI_H
 
 #include <stddef.h>
+#include <time.h>
 #include "task.h"
+
+// Color pair definitions
+#define CP_DEFAULT    1
+#define CP_OVERDUE    2
+#define CP_APPROACH   3
+#define CP_FUTURE     4
 
 // Initialize the TUI; returns 0 on success
 int ui_init(void);

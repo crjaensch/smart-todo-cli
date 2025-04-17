@@ -2,36 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <curl/curl.h>
 #include <cjson/cJSON.h>
 #include "task.h"
 #include "storage.h"
 #include <time.h>
-
-#define AI_SMART_ADD_DEBUG 0
-
-struct curl_mem {
-    char *ptr;
-    size_t len;
-};
-
-static size_t write_cb(void *data, size_t size, size_t nmemb, void *userp) {
-    size_t realsize = size * nmemb;
-    struct curl_mem *mem = (struct curl_mem *)userp;
-    mem->ptr = realloc(mem->ptr, mem->len + realsize + 1);
-    memcpy(&(mem->ptr[mem->len]), data, realsize);
-    mem->len += realsize;
-    mem->ptr[mem->len] = 0;
-    return realsize;
-}
+#include "llm_api.h"
 
 void ai_smart_add(const char *prompt, int debug) {
-    if (debug) fprintf(stderr, "[ai_smart_add] Called with prompt: %s\n", prompt);
-    const char *api_key = getenv("OPENAI_API_KEY");
-    if (!api_key) {
-        if (debug) fprintf(stderr, "OPENAI_API_KEY not set\n");
-        exit(1);
-    }
     // Get current date in ISO 8601 (UTC, no time)
     time_t now = time(NULL);
     struct tm tm_now;
@@ -79,66 +56,40 @@ void ai_smart_add(const char *prompt, int debug) {
         "  \"status\": \"pending\"\n"
         "}\n",
         today_str);
-    char usermsg[512];
-    snprintf(usermsg, sizeof(usermsg), "%s", prompt);
-    // Build POST body
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "model", "gpt-4.1-mini");
-    cJSON *msgs = cJSON_CreateArray();
-    cJSON *sys_msg = cJSON_CreateObject();
-    cJSON_AddStringToObject(sys_msg, "role", "system");
-    cJSON_AddStringToObject(sys_msg, "content", sys);
-    cJSON_AddItemToArray(msgs, sys_msg);
-    cJSON *user_msg = cJSON_CreateObject();
-    cJSON_AddStringToObject(user_msg, "role", "user");
-    cJSON_AddStringToObject(user_msg, "content", usermsg);
-    cJSON_AddItemToArray(msgs, user_msg);
-    cJSON_AddItemToObject(root, "messages", msgs);
-    char *json_body = cJSON_PrintUnformatted(root);
-    if (debug) fprintf(stderr, "[ai_smart_add] Request JSON: %s\n", json_body);
-
-    CURL *curl = curl_easy_init();
-    CURLcode res;
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    char auth[512];
-    snprintf(auth, sizeof(auth), "Authorization: Bearer %s", api_key);
-    headers = curl_slist_append(headers, auth);
-
-    struct curl_mem chunk = { malloc(1), 0 };
-    curl_easy_setopt(curl, CURLOPT_URL, "https://api.openai.com/v1/chat/completions");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_body);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-    res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    if (debug) fprintf(stderr, "[ai_smart_add] HTTP status: %ld\n", http_code);
-    if (res != CURLE_OK) {
-        if (debug) fprintf(stderr, "curl failed: %s\n", curl_easy_strerror(res));
+    char *llm_raw = NULL;
+    int llm_status = llm_chat(sys, prompt, &llm_raw, debug);
+    if (llm_status != 0 || !llm_raw) {
+        if (debug) fprintf(stderr, "[ai_smart_add] LLM call failed\n");
+        if (llm_raw) free(llm_raw);
         exit(1);
     }
-    if (debug) fprintf(stderr, "[ai_smart_add] Raw response: %s\n", chunk.ptr);
+    if (debug) fprintf(stderr, "[ai_smart_add] Raw LLM response: %s\n", llm_raw);
     // Parse response
-    cJSON *resp = cJSON_Parse(chunk.ptr);
+    cJSON *resp = cJSON_Parse(llm_raw);
     if (!resp) {
-        if (debug) fprintf(stderr, "OpenAI response not JSON. Raw: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "OpenAI response not JSON. Raw: %s\n", llm_raw);
+        free(llm_raw);
         exit(1);
     }
     cJSON *choices = cJSON_GetObjectItem(resp, "choices");
     if (!choices || !cJSON_IsArray(choices)) {
-        if (debug) fprintf(stderr, "No choices. Full response: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "No choices. Full response: %s\n", llm_raw);
+        cJSON_Delete(resp);
+        free(llm_raw);
         exit(1);
     }
     cJSON *msg = cJSON_GetObjectItem(cJSON_GetArrayItem(choices, 0), "message");
     if (!msg) {
-        if (debug) fprintf(stderr, "No message. Full response: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "No message. Full response: %s\n", llm_raw);
+        cJSON_Delete(resp);
+        free(llm_raw);
         exit(1);
     }
     cJSON *content = cJSON_GetObjectItem(msg, "content");
     if (!content || !cJSON_IsString(content)) {
-        if (debug) fprintf(stderr, "No content. Full response: %s\n", chunk.ptr);
+        if (debug) fprintf(stderr, "No content. Full response: %s\n", llm_raw);
+        cJSON_Delete(resp);
+        free(llm_raw);
         exit(1);
     }
     if (debug) fprintf(stderr, "[ai_smart_add] LLM content: %s\n", content->valuestring);
@@ -146,6 +97,8 @@ void ai_smart_add(const char *prompt, int debug) {
     Task *t = task_from_json(content->valuestring);
     if (!t) {
         if (debug) fprintf(stderr, "Could not parse task JSON from LLM. Content: %s\n", content->valuestring);
+        cJSON_Delete(resp);
+        free(llm_raw);
         exit(1);
     }
     // Load, append, save
@@ -156,14 +109,13 @@ void ai_smart_add(const char *prompt, int debug) {
     tasks[count] = NULL;
     if (storage_save_tasks(tasks, count) != 0) {
         if (debug) fprintf(stderr, "Failed to save new task\n");
+        storage_free_tasks(tasks, count);
+        cJSON_Delete(resp);
+        free(llm_raw);
         exit(1);
     }
     printf("AI task added: %s\n", t->name);
     storage_free_tasks(tasks, count);
-    free(chunk.ptr);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    cJSON_Delete(root);
     cJSON_Delete(resp);
-    free(json_body);
+    free(llm_raw);
 }

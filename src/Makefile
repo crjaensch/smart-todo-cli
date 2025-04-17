@@ -6,8 +6,8 @@ CFLAGS  = -std=c17 -Wall -Wextra -pedantic -I/opt/homebrew/include
 LDFLAGS = -L/opt/homebrew/lib -lcjson -lncurses -lcurl
 
 # Sources and objects
-SRCS   = main.c ui.c storage.c task.c ai_assist.c
-OBJS   = $(SRCS:.c=.o)
+SRCS   = main.c ui.c storage.c task.c ai_assist.c ai_chat.c llm_api.c
+OBJS   = main.o task.o storage.o ai_assist.o ai_chat.o llm_api.o ui.o
 TARGET = smartodo
 
 .PHONY: all clean install
@@ -19,6 +19,12 @@ $(TARGET): $(OBJS)
 
 # Compile .c to .o, update dependencies as needed
 %.o: %.c ui.h storage.h task.h ai_assist.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+ai_chat.o: ai_chat.c ai_chat.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+llm_api.o: llm_api.c llm_api.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:

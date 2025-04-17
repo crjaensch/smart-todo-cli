@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <time.h>
 
+// Constants
+#define MAX_TAGS 5
+#define MAX_TAG_LEN 20
+#define MAX_TASK_SERIALIZE_LEN 512
+
 // Priority levels for tasks
 typedef enum {
     PRIORITY_LOW,
