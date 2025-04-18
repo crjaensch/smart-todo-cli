@@ -81,7 +81,39 @@ int main(int argc, char *argv[]) {
         clear();
         ui_draw_header(search_term[0] ? search_term : "All Tasks");
         ui_draw_tasks(disp, disp_count, selected);
-        ui_draw_footer();
+        
+        // Add a suggestion for the selected task if applicable
+        if (disp_count > 0 && selected < disp_count) {
+            Task *selected_task = disp[selected];
+            
+            // Generate a contextual suggestion based on task state
+            char suggestion[128] = "";
+            
+            if (selected_task->status == STATUS_PENDING) {
+                if (selected_task->due > 0) {
+                    time_t now = time(NULL);
+                    if (selected_task->due < now) {
+                        strcpy(suggestion, "Mark as done or reschedule");
+                    } else if (selected_task->priority == PRIORITY_HIGH) {
+                        strcpy(suggestion, "Break into smaller steps");
+                    }
+                } else if (selected_task->priority == PRIORITY_LOW) {
+                    strcpy(suggestion, "Set a due date");
+                }
+            } else if (selected_task->status == STATUS_DONE) {
+                strcpy(suggestion, "Archive or delete");
+            }
+            
+            // If we have a suggestion, display it below the task list
+            if (suggestion[0] != '\0') {
+                int suggestion_y = 1 + disp_count + 1; // One line below the task list
+                if (suggestion_y < LINES - 2) { // Make sure it fits on screen
+                    ui_draw_suggestion(suggestion_y, suggestion);
+                }
+            }
+        }
+        
+        ui_draw_standard_footer();
         refresh();
 
         int ch = ui_get_input();

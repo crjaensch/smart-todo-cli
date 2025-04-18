@@ -29,6 +29,15 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected);
 // Draw footer with help keys
 void ui_draw_footer(void);
 
+// Draw footer with standard mode help keys
+void ui_draw_standard_footer(void);
+
+// Draw footer with AI chat mode help keys
+void ui_draw_ai_chat_footer(void);
+
+// Draw a suggestion with an arrow indicator
+void ui_draw_suggestion(int y, const char *suggestion);
+
 // Handle user input; returns key code
 int ui_get_input(void);
 

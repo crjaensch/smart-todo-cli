@@ -14,8 +14,8 @@ int ui_init(void) {
     use_default_colors();
     init_pair(CP_DEFAULT,  -1, -1);
     init_pair(CP_OVERDUE,  COLOR_RED,    -1);
-    init_pair(CP_APPROACH, COLOR_YELLOW, -1);
-    init_pair(CP_FUTURE,   COLOR_GREEN,  -1);
+    init_pair(CP_APPROACH, COLOR_CYAN, -1);
+    init_pair(CP_FUTURE,   COLOR_CYAN,  -1);
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
@@ -28,18 +28,49 @@ void ui_teardown(void) {
 }
 
 void ui_draw_header(const char *status_msg) {
+    // Suppress unused parameter warning
+    (void)status_msg;
+    
     int w = COLS;
     attron(A_REVERSE);
     mvhline(0, 0, ' ', w);
-    mvprintw(0, 1, "Todo App - %s", status_msg);
+    
+    // Add color for the smartodo text
+    attron(COLOR_PAIR(CP_FUTURE));
+    mvprintw(0, 1, "smartodo");
+    attroff(COLOR_PAIR(CP_FUTURE));
+    
+    // Add the subtitle in normal color
+    attron(A_DIM);
+    mvprintw(0, 10, "- Terminal Smart Planner");
+    attroff(A_DIM);
+    
+    // Add AI icon on the right side - using ASCII compatible version
+    attron(COLOR_PAIR(CP_APPROACH));
+    mvprintw(0, w - 7, "[AI]");
+    attroff(COLOR_PAIR(CP_APPROACH));
+    
     attroff(A_REVERSE);
 }
 
 void ui_draw_footer(void) {
+    ui_draw_standard_footer();
+}
+
+void ui_draw_standard_footer(void) {
     int y = LINES - 1;
     attron(A_REVERSE);
     mvhline(y, 0, ' ', COLS);
     mvprintw(y, 1, "a:Add e:Edit d:Delete m:Mark s:Sort /:Search q:Quit");
+    attroff(A_REVERSE);
+}
+
+// Draw footer with AI chat mode help keys
+void ui_draw_ai_chat_footer(void) {
+    int y = LINES - 1;
+    attron(A_REVERSE);
+    mvhline(y, 0, ' ', COLS);
+    mvprintw(y, 1, "AI Chat | j/k:Navigate Enter:Command m:Mark q:Quit");
     attroff(A_REVERSE);
 }
 
@@ -55,29 +86,93 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
     int maxy = LINES - 2; // excluding header/footer
     size_t start = 0;
     if (selected >= (size_t)maxy) start = selected - maxy + 1;
+    
+    // Clear the task display area
+    for (int i = 1; i < LINES - 1; i++) {
+        move(i, 0);
+        clrtoeol();
+    }
+    
     for (size_t i = 0; i < count && i < start + maxy; ++i) {
         size_t idx = i;
         if (idx < start) continue;
         int y = 1 + (i - start);
         Task *t = tasks[idx];
-        int cp = ui_color_for_due(t->due);
-        if (idx == selected) attron(A_STANDOUT);
-        attron(COLOR_PAIR(cp));
-        // Prepare display strings for priority and due date
-        const char *prio_str = (t->priority == PRIORITY_HIGH) ? "high" : (t->priority == PRIORITY_MEDIUM ? "med" : "low");
-        char date_buf[16];
-        if (t->due > 0) {
-            struct tm tm;
-            gmtime_r(&t->due, &tm);
-            strftime(date_buf, sizeof(date_buf), "%Y-%m-%d", &tm);
+        
+        // Determine task status indicator
+        char status_brackets[3] = "[ ]";
+        
+        if (t->status == STATUS_DONE) {
+            status_brackets[0] = '[';
+            status_brackets[1] = 'x';
+            status_brackets[2] = ']';
+        } else if (t->priority == PRIORITY_HIGH) {
+            status_brackets[0] = '[';
+            status_brackets[1] = '!';
+            status_brackets[2] = ']';
         } else {
-            strcpy(date_buf, "--");
+            status_brackets[0] = '[';
+            status_brackets[1] = ' ';
+            status_brackets[2] = ']';
         }
-        // Display: date [prio] --- [ ] Task name
-        mvprintw(y, 2, "%10s [%4s] --- [%c] %s", date_buf, prio_str, (t->status==STATUS_DONE?'x':' '), t->name);
-        attroff(COLOR_PAIR(cp));
-        if (idx == selected) attroff(A_STANDOUT);
+        
+        // Prepare task name with appropriate color
+        int cp = ui_color_for_due(t->due);
+        
+        // Highlight selected task
+        if (idx == selected) {
+            attron(A_BOLD);
+            mvprintw(y, 2, "%s", status_brackets);
+            
+            // Print task name with color
+            attron(COLOR_PAIR(cp));
+            mvprintw(y, 7, "%s", t->name);
+            attroff(COLOR_PAIR(cp));
+            
+            attroff(A_BOLD);
+        } else {
+            // Print status indicator
+            if (t->status == STATUS_DONE) {
+                attron(A_DIM); // Dimmed for completed tasks
+            } else if (t->priority == PRIORITY_HIGH) {
+                attron(COLOR_PAIR(CP_OVERDUE)); // Highlight for high priority
+            }
+            
+            mvprintw(y, 2, "%s", status_brackets);
+            
+            // Print task name
+            if (t->status == STATUS_DONE) {
+                mvprintw(y, 7, "%s", t->name);
+                attroff(A_DIM);
+            } else {
+                attron(COLOR_PAIR(cp));
+                mvprintw(y, 7, "%s", t->name);
+                attroff(COLOR_PAIR(cp));
+            }
+        }
     }
+}
+
+/**
+ * Display a suggestion for the current task
+ * @param y The y-coordinate to display the suggestion at
+ * @param suggestion The suggestion text to display
+ */
+void ui_draw_suggestion(int y, const char *suggestion) {
+    if (!suggestion || !suggestion[0]) return;
+    
+    // Draw the arrow indicator using ASCII alternative
+    attron(COLOR_PAIR(CP_APPROACH));
+    mvprintw(y, 2, "->" ); // ASCII arrow instead of Unicode
+    attroff(COLOR_PAIR(CP_APPROACH));
+    
+    // Draw the "Suggest:" prefix
+    attron(COLOR_PAIR(CP_APPROACH));
+    mvprintw(y, 5, "Suggest:");
+    attroff(COLOR_PAIR(CP_APPROACH));
+    
+    // Draw the suggestion text
+    mvprintw(y, 15, "'%s", suggestion);
 }
 
 int ui_get_input(void) {
