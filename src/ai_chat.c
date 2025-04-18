@@ -114,6 +114,104 @@ end_prompt:
     return;
 }
 
+// Generate an AI-powered suggestion for a task
+static char* generate_ai_suggestion(Task *task) {
+    if (!task) return NULL;
+    
+    // Allocate memory for the suggestion
+    char *suggestion = utils_calloc(1, 128);
+    if (!suggestion) return NULL;
+    
+    // Format the due date if available
+    char due_str[32] = "no due date";
+    if (task->due > 0) {
+        struct tm tm_due;
+        gmtime_r(&task->due, &tm_due);
+        strftime(due_str, sizeof(due_str), "%Y-%m-%d", &tm_due);
+    }
+    
+    // Format the priority
+    const char *priority_str = "low";
+    if (task->priority == PRIORITY_HIGH) {
+        priority_str = "high";
+    } else if (task->priority == PRIORITY_MEDIUM) {
+        priority_str = "medium";
+    }
+    
+    // Create a system prompt for the suggestion
+    char system_prompt[512];
+    snprintf(system_prompt, sizeof(system_prompt),
+        "You are a helpful task assistant that provides brief, actionable suggestions. "
+        "Respond with ONLY a single, concise suggestion (max 50 chars) for how to approach this task. "
+        "Do not include any explanations, prefixes, or formatting. Just the suggestion text.");
+    
+    // Create a user prompt with task details
+    char user_prompt[512];
+    snprintf(user_prompt, sizeof(user_prompt),
+        "Task: %s\nPriority: %s\nDue date: %s\nStatus: %s\n\n"
+        "Give me a brief, actionable suggestion for how to approach this task.",
+        task->name,
+        priority_str,
+        due_str,
+        task->status == STATUS_DONE ? "completed" : "pending");
+    
+    // Call the LLM API with a smaller, faster model for suggestions
+    char *raw_response = NULL;
+    if (llm_chat(system_prompt, user_prompt, &raw_response, 0, "gpt-4.1-nano") != 0 || !raw_response) {
+        // If API call fails, provide a fallback suggestion
+        if (task->priority == PRIORITY_HIGH) {
+            strcpy(suggestion, "Break into smaller steps");
+        } else {
+            strcpy(suggestion, "Consider prioritizing this task");
+        }
+        return suggestion;
+    }
+    
+    // Parse the JSON response
+    cJSON *json = cJSON_Parse(raw_response);
+    if (!json) {
+        // JSON parsing failed, use the raw response but truncate if needed
+        size_t len = strlen(raw_response);
+        if (len > 127) len = 127;
+        strncpy(suggestion, raw_response, len);
+        suggestion[len] = '\0';
+        free(raw_response);
+        return suggestion;
+    }
+    
+    // Extract the content from the JSON response
+    cJSON *choices = cJSON_GetObjectItem(json, "choices");
+    if (choices && cJSON_IsArray(choices) && cJSON_GetArraySize(choices) > 0) {
+        cJSON *first_choice = cJSON_GetArrayItem(choices, 0);
+        if (first_choice) {
+            cJSON *message = cJSON_GetObjectItem(first_choice, "message");
+            if (message) {
+                cJSON *content = cJSON_GetObjectItem(message, "content");
+                if (content && cJSON_IsString(content) && content->valuestring) {
+                    // Copy the content to our suggestion buffer
+                    strncpy(suggestion, content->valuestring, 127);
+                    suggestion[127] = '\0';
+                }
+            }
+        }
+    }
+    
+    // If we couldn't extract the content, provide a fallback
+    if (suggestion[0] == '\0') {
+        if (task->priority == PRIORITY_HIGH) {
+            strcpy(suggestion, "Break into smaller steps");
+        } else {
+            strcpy(suggestion, "Consider prioritizing this task");
+        }
+    }
+    
+    // Clean up
+    cJSON_Delete(json);
+    free(raw_response);
+    
+    return suggestion;
+}
+
 // --- Main AI Chat REPL Function ---
 
 int ai_chat_repl(void) {
@@ -180,34 +278,22 @@ int ai_chat_repl(void) {
         if (disp_count > 0 && selected < disp_count) {
             Task *selected_task = disp[selected];
             
-            // Generate a contextual suggestion based on task state
-            char suggestion[128] = "";
-            
-            if (selected_task->status == STATUS_PENDING) {
-                if (selected_task->due > 0) {
-                    time_t now = time(NULL);
-                    if (selected_task->due < now) {
-                        strcpy(suggestion, "Mark as done or reschedule");
-                    } else if (selected_task->priority == PRIORITY_HIGH) {
-                        strcpy(suggestion, "Outline 3 key points");
-                    }
-                } else if (selected_task->priority == PRIORITY_LOW) {
-                    strcpy(suggestion, "Set a due date");
-                }
-            } else if (selected_task->status == STATUS_DONE) {
-                strcpy(suggestion, "Archive or delete");
-            }
-            
-            // If we have a suggestion, display it below the task list
-            if (suggestion[0] != '\0') {
-                int suggestion_y = 1 + disp_count + 1; // One line below the task list
-                if (suggestion_y < LINES - 2) { // Make sure it fits on screen
-                    ui_draw_suggestion(suggestion_y, suggestion);
+            // Only generate AI suggestions for high priority tasks or overdue tasks
+            if (selected_task->priority == PRIORITY_HIGH || 
+                (selected_task->due > 0 && selected_task->due < time(NULL))) {
+                
+                // Generate AI-powered suggestion
+                char *ai_suggestion = generate_ai_suggestion(selected_task);
+                
+                if (ai_suggestion && ai_suggestion[0]) {
+                    // Display the AI-generated suggestion
+                    ui_draw_suggestion(LINES - 3, ai_suggestion);
+                    free(ai_suggestion); // Free the suggestion memory
                 }
             }
         }
         
-        // Draw the AI chat mode footer
+        // Draw footer with help text
         ui_draw_ai_chat_footer();
         
         // Display last error if any
@@ -344,7 +430,7 @@ int ai_chat_repl(void) {
         // NOTE: We are not using chat history here for simplicity, sending the full context each time.
         char *llm_response_json = NULL;
         // show_message("Thinking..."); // Optional feedback
-        int llm_status = llm_chat(sys_prompt, user_input, &llm_response_json, 0); // temperature=0 for deterministic JSON
+        int llm_status = llm_chat(sys_prompt, user_input, &llm_response_json, 0, NULL); // temperature=0 for deterministic JSON
 
         if (llm_status != 0 || !llm_response_json || llm_response_json[0] == '\0') {
             snprintf(last_error, MAX_ERR_LEN, "AI interaction failed (status: %d)", llm_status);
@@ -384,7 +470,7 @@ int ai_chat_repl(void) {
         
         if (!content) {
             snprintf(last_error, MAX_ERR_LEN, "Could not extract content from API response");
-            free(disp);
+            free(disp); // Free display list before continuing
             continue;
         }
         
@@ -446,8 +532,12 @@ int ai_chat_repl(void) {
 
                 // Parse Due Date - default to 0 (no due date) if missing or invalid
                 time_t due_time = 0;
-                if (due && cJSON_IsString(due)) {
-                    due_time = utils_parse_date(due->valuestring);
+                if (due) {
+                    if (cJSON_IsString(due)) {
+                        due_time = utils_parse_date(due->valuestring);
+                    } else if (cJSON_IsNull(due)) {
+                        due_time = 0; // Explicit null means clear the due date
+                    }
                 }
 
                 // Add task using task manager

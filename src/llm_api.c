@@ -5,12 +5,24 @@
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
-
+/**
+ * Structure to hold the memory chunk for curl write callback.
+ */
 struct curl_mem {
     char *ptr;
     size_t len;
 };
 
+/**
+ * Write callback function for curl.
+ * 
+ * @param contents The contents to be written.
+ * @param size The size of each element.
+ * @param nmemb The number of elements.
+ * @param userp The user-provided pointer.
+ * 
+ * @return The number of bytes written.
+ */
 static size_t write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct curl_mem *mem = (struct curl_mem *)userp;
@@ -23,7 +35,18 @@ static size_t write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
     return realsize;
 }
 
-int llm_chat(const char *system_prompt, const char *user_prompt, char **response, int debug) {
+/**
+ * Send a chat completion request to the OpenAI API.
+ * 
+ * @param system_prompt The system prompt.
+ * @param user_prompt The user prompt.
+ * @param response The response from the API.
+ * @param debug Whether to print debug messages.
+ * @param model The model to use (optional, defaults to gpt-4.1-mini).
+ * 
+ * @return 0 on success, non-zero on failure.
+ */
+int llm_chat(const char *system_prompt, const char *user_prompt, char **response, int debug, const char *model) {
     const char *api_key = getenv("OPENAI_API_KEY");
     if (!api_key) {
         if (debug) fprintf(stderr, "OPENAI_API_KEY not set\n");
@@ -43,7 +66,11 @@ int llm_chat(const char *system_prompt, const char *user_prompt, char **response
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
     // Compose JSON body with system and user prompt using cJSON
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "model", "gpt-4.1-mini");
+    
+    // Use the provided model or default to gpt-4.1-mini
+    const char *model_to_use = model ? model : "gpt-4.1-mini";
+    cJSON_AddStringToObject(root, "model", model_to_use);
+    
     cJSON *msgs = cJSON_CreateArray();
     cJSON *sys_msg = cJSON_CreateObject();
     cJSON_AddStringToObject(sys_msg, "role", "system");

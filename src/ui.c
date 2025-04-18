@@ -99,6 +99,24 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
         int y = 1 + (i - start);
         Task *t = tasks[idx];
         
+        // Format priority
+        const char *prio_str = "";
+        if (t->priority == PRIORITY_HIGH) {
+            prio_str = "high";
+        } else if (t->priority == PRIORITY_MEDIUM) {
+            prio_str = "med";
+        } else {
+            prio_str = "low";
+        }
+        
+        // Format due date
+        char due_str[16] = "--";
+        if (t->due > 0) {
+            struct tm tm_due;
+            gmtime_r(&t->due, &tm_due);
+            strftime(due_str, sizeof(due_str), "%Y-%m-%d", &tm_due);
+        }
+        
         // Determine task status indicator
         char status_brackets[3] = "[ ]";
         
@@ -122,32 +140,77 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
         // Highlight selected task
         if (idx == selected) {
             attron(A_BOLD);
-            mvprintw(y, 2, "%s", status_brackets);
+            
+            // Print priority with the same color as due date
+            attron(COLOR_PAIR(cp));
+            mvprintw(y, 2, "[%s]", prio_str);
+            attroff(COLOR_PAIR(cp));
+            
+            // Print separator
+            mvprintw(y, 8, "::");
+            
+            // Print date with color
+            attron(COLOR_PAIR(cp));
+            mvprintw(y, 11, "%s", due_str);
+            attroff(COLOR_PAIR(cp));
+            
+            // Print separator
+            mvprintw(y, 21, "::");
+            
+            // Print status indicator
+            mvprintw(y, 24, "%s", status_brackets);
             
             // Print task name with color
             attron(COLOR_PAIR(cp));
-            mvprintw(y, 7, "%s", t->name);
+            mvprintw(y, 29, "%s", t->name);
             attroff(COLOR_PAIR(cp));
             
             attroff(A_BOLD);
         } else {
-            // Print status indicator
+            // Apply dimming for completed tasks
             if (t->status == STATUS_DONE) {
-                attron(A_DIM); // Dimmed for completed tasks
-            } else if (t->priority == PRIORITY_HIGH) {
-                attron(COLOR_PAIR(CP_OVERDUE)); // Highlight for high priority
+                attron(A_DIM);
             }
             
-            mvprintw(y, 2, "%s", status_brackets);
+            // Print priority with the same color as due date
+            if (t->status != STATUS_DONE) {
+                attron(COLOR_PAIR(cp));
+            }
+            mvprintw(y, 2, "[%s]", prio_str);
+            if (t->status != STATUS_DONE) {
+                attroff(COLOR_PAIR(cp));
+            }
+            
+            // Print separator
+            mvprintw(y, 8, "::");
+            
+            // Print date with color
+            if (t->status != STATUS_DONE) {
+                attron(COLOR_PAIR(cp));
+            }
+            mvprintw(y, 11, "%s", due_str);
+            if (t->status != STATUS_DONE) {
+                attroff(COLOR_PAIR(cp));
+            }
+            
+            // Print separator
+            mvprintw(y, 21, "::");
+            
+            // Print status indicator
+            mvprintw(y, 24, "%s", status_brackets);
             
             // Print task name
-            if (t->status == STATUS_DONE) {
-                mvprintw(y, 7, "%s", t->name);
-                attroff(A_DIM);
-            } else {
+            if (t->status != STATUS_DONE) {
                 attron(COLOR_PAIR(cp));
-                mvprintw(y, 7, "%s", t->name);
+            }
+            mvprintw(y, 29, "%s", t->name);
+            if (t->status != STATUS_DONE) {
                 attroff(COLOR_PAIR(cp));
+            }
+            
+            // Remove dimming if applied
+            if (t->status == STATUS_DONE) {
+                attroff(A_DIM);
             }
         }
     }
