@@ -34,7 +34,7 @@ static Status str_to_status(const char *s) {
 }
 
 Task *task_create(const char *name, time_t due, const char *tags[], size_t tag_count, Priority priority) {
-    Task *t = calloc(1, sizeof(Task));
+    Task *t = utils_calloc(1, sizeof(Task));
     if (!t) return NULL;
     
     // Generate UUID
@@ -42,9 +42,19 @@ Task *task_create(const char *name, time_t due, const char *tags[], size_t tag_c
     uuid_generate(binuuid);
     char uuid_str[37];
     uuid_unparse_lower(binuuid, uuid_str);
-    t->id = strdup(uuid_str);
+    t->id = utils_strdup(uuid_str);
+    if (!t->id) {
+        free(t);
+        return NULL;
+    }
     
-    t->name = strdup(name);
+    t->name = utils_strdup(name);
+    if (!t->name) {
+        free(t->id);
+        free(t);
+        return NULL;
+    }
+    
     t->created = time(NULL);
     t->due = due;
     t->priority = priority;
@@ -52,9 +62,27 @@ Task *task_create(const char *name, time_t due, const char *tags[], size_t tag_c
 
     t->tag_count = tag_count;
     if (tag_count > 0) {
-        t->tags = malloc(tag_count * sizeof(char*));
+        t->tags = utils_malloc(tag_count * sizeof(char*));
+        if (!t->tags) {
+            free(t->name);
+            free(t->id);
+            free(t);
+            return NULL;
+        }
+        
         for (size_t i = 0; i < tag_count; ++i) {
-            t->tags[i] = strdup(tags[i]);
+            t->tags[i] = utils_strdup(tags[i]);
+            if (!t->tags[i]) {
+                // Clean up already allocated tags
+                for (size_t j = 0; j < i; ++j) {
+                    free(t->tags[j]);
+                }
+                free(t->tags);
+                free(t->name);
+                free(t->id);
+                free(t);
+                return NULL;
+            }
         }
     } else {
         t->tags = NULL;
@@ -82,11 +110,19 @@ char *task_to_json(const Task *t) {
     cJSON_AddStringToObject(obj, "name", t->name);
 
     char *created_str = utils_time_to_iso8601(t->created);
+    if (!created_str) {
+        cJSON_Delete(obj);
+        return NULL;
+    }
     cJSON_AddStringToObject(obj, "created", created_str);
     free(created_str);
 
     if (t->due > 0) {
         char *due_str = utils_time_to_iso8601(t->due);
+        if (!due_str) {
+            cJSON_Delete(obj);
+            return NULL;
+        }
         cJSON_AddStringToObject(obj, "due", due_str);
         free(due_str);
     } else {
@@ -94,8 +130,18 @@ char *task_to_json(const Task *t) {
     }
 
     cJSON *tag_arr = cJSON_AddArrayToObject(obj, "tags");
+    if (!tag_arr) {
+        cJSON_Delete(obj);
+        return NULL;
+    }
+    
     for (size_t i = 0; i < t->tag_count; ++i) {
-        cJSON_AddItemToArray(tag_arr, cJSON_CreateString(t->tags[i]));
+        cJSON *tag_item = cJSON_CreateString(t->tags[i]);
+        if (!tag_item) {
+            cJSON_Delete(obj);
+            return NULL;
+        }
+        cJSON_AddItemToArray(tag_arr, tag_item);
     }
 
     cJSON_AddStringToObject(obj, "priority", priority_to_str(t->priority));
@@ -124,14 +170,27 @@ Task *task_from_json(const char *json_str) {
         return NULL;
     }
 
-    Task *t = calloc(1, sizeof(Task));
+    Task *t = utils_calloc(1, sizeof(Task));
     if (!t) {
         cJSON_Delete(obj);
         return NULL;
     }
 
-    t->id = strdup(id->valuestring);
-    t->name = strdup(name->valuestring);
+    t->id = utils_strdup(id->valuestring);
+    if (!t->id) {
+        free(t);
+        cJSON_Delete(obj);
+        return NULL;
+    }
+    
+    t->name = utils_strdup(name->valuestring);
+    if (!t->name) {
+        free(t->id);
+        free(t);
+        cJSON_Delete(obj);
+        return NULL;
+    }
+    
     t->created = utils_iso8601_to_time(created->valuestring);
 
     if (cJSON_IsString(due)) {
@@ -144,15 +203,49 @@ Task *task_from_json(const char *json_str) {
     size_t count = cJSON_GetArraySize(tags);
     t->tag_count = count;
     if (count > 0) {
-        t->tags = malloc(count * sizeof(char*));
+        t->tags = utils_malloc(count * sizeof(char*));
+        if (!t->tags) {
+            free(t->name);
+            free(t->id);
+            free(t);
+            cJSON_Delete(obj);
+            return NULL;
+        }
+        
         for (size_t i = 0; i < count; ++i) {
             cJSON *item = cJSON_GetArrayItem(tags, i);
             if (cJSON_IsString(item)) {
-                t->tags[i] = strdup(item->valuestring);
+                t->tags[i] = utils_strdup(item->valuestring);
+                if (!t->tags[i]) {
+                    // Clean up already allocated tags
+                    for (size_t j = 0; j < i; ++j) {
+                        free(t->tags[j]);
+                    }
+                    free(t->tags);
+                    free(t->name);
+                    free(t->id);
+                    free(t);
+                    cJSON_Delete(obj);
+                    return NULL;
+                }
             } else {
-                t->tags[i] = strdup("");
+                t->tags[i] = utils_strdup("");
+                if (!t->tags[i]) {
+                    // Clean up already allocated tags
+                    for (size_t j = 0; j < i; ++j) {
+                        free(t->tags[j]);
+                    }
+                    free(t->tags);
+                    free(t->name);
+                    free(t->id);
+                    free(t);
+                    cJSON_Delete(obj);
+                    return NULL;
+                }
             }
         }
+    } else {
+        t->tags = NULL;
     }
 
     t->priority = str_to_priority(priority->valuestring);
@@ -180,32 +273,45 @@ int task_compare_by_creation(const void *a, const void *b) {
 int task_compare_by_due(const void *a, const void *b) {
     const Task *t1 = *(const Task **)a;
     const Task *t2 = *(const Task **)b;
-    if (t1->due == 0 && t2->due == 0) return 0;
+    
+    // If both have no due date, compare by creation time
+    if (t1->due == 0 && t2->due == 0)
+        return task_compare_by_creation(a, b);
+        
+    // Tasks with no due date go last
     if (t1->due == 0) return 1;
     if (t2->due == 0) return -1;
+    
+    // Compare due dates
     if (t1->due < t2->due) return -1;
     if (t1->due > t2->due) return 1;
-    // If due dates are equal, sort by priority (high first)
-    if (t1->priority > t2->priority) return -1;
-    if (t1->priority < t2->priority) return 1;
-    return 0;
+    
+    // If due dates are equal, compare by creation time
+    return task_compare_by_creation(a, b);
 }
 
 bool task_has_tag(const Task *t, const char *tag) {
+    if (!t || !tag) return false;
     for (size_t i = 0; i < t->tag_count; ++i) {
-        if (strcmp(t->tags[i], tag) == 0) return true;
+        if (strcasecmp(t->tags[i], tag) == 0) return true;
     }
     return false;
 }
 
 bool task_has_status(const Task *t, Status status) {
-    return t->status == status;
+    return t && t->status == status;
 }
 
 bool task_matches_search(const Task *t, const char *search_term) {
-    if (strcasestr(t->name, search_term)) return true;
+    if (!t || !search_term || search_term[0] == '\0') return false;
+    
+    // Check name
+    if (t->name && strcasestr(t->name, search_term)) return true;
+    
+    // Check tags
     for (size_t i = 0; i < t->tag_count; ++i) {
         if (strcasestr(t->tags[i], search_term)) return true;
     }
+    
     return false;
 }
