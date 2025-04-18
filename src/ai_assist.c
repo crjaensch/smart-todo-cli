@@ -57,7 +57,7 @@ void ai_smart_add(const char *prompt, int debug) {
         "}\n",
         today_str);
     char *llm_raw = NULL;
-    int llm_status = llm_chat(sys, prompt, &llm_raw, debug);
+    int llm_status = llm_chat(sys, prompt, &llm_raw, debug, NULL);
     if (llm_status != 0 || !llm_raw) {
         if (debug) fprintf(stderr, "[ai_smart_add] LLM call failed\n");
         if (llm_raw) free(llm_raw);
