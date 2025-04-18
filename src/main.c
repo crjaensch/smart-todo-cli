@@ -8,6 +8,7 @@
 #include "storage.h"
 #include "task.h"
 #include "ai_chat.h"
+#include "utils.h"
 
 // Sort modes
 enum { BY_CREATION, BY_NAME } SortMode;
@@ -24,18 +25,6 @@ static void prompt_input(const char *prompt, char *buf, size_t bufsize) {
     getnstr(buf, (int)bufsize - 1);
     noecho();
     cbreak();
-}
-
-// Parse date in YYYY-MM-DD to time_t (midnight UTC), 0 if empty/invalid
-static time_t parse_date(const char *s) {
-    if (!s || s[0] == '\0') return 0;
-    struct tm tm = {0};
-    if (!strptime(s, "%Y-%m-%d", &tm)) return 0;
-    // Set midnight
-    tm.tm_hour = 0;
-    tm.tm_min = 0;
-    tm.tm_sec = 0;
-    return timegm(&tm);
 }
 
 int main(int argc, char *argv[]) {
@@ -121,7 +110,7 @@ int main(int argc, char *argv[]) {
                 if (strcasecmp(prio_str, "high") == 0) prio = PRIORITY_HIGH;
                 else if (strncasecmp(prio_str, "med", 3) == 0) prio = PRIORITY_MEDIUM;
                 // Parse due date
-                time_t due = parse_date(date_str);
+                time_t due = utils_parse_date(date_str);
                 // Create and append
                 Task *t = task_create(name, due, (const char **)tag_tokens, tag_count, prio);
                 tasks = realloc(tasks, (count + 1 + 1) * sizeof(Task*));
@@ -185,7 +174,7 @@ int main(int argc, char *argv[]) {
                     t->name = strdup(name);
                 }
                 if (date_str[0] != '\0') {
-                    t->due = parse_date(date_str);
+                    t->due = utils_parse_date(date_str);
                 }
                 // Tags
                 for (size_t i = 0; i < t->tag_count; ++i) free(t->tags[i]);

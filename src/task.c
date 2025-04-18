@@ -4,6 +4,7 @@
 #include <uuid/uuid.h>
 #include <cjson/cJSON.h>
 #include <time.h>
+#include "utils.h"
 
 // Helper: convert Priority to string
 static const char *priority_to_str(Priority p) {
@@ -30,28 +31,6 @@ static const char *status_to_str(Status s) {
 // Helper: parse string to Status
 static Status str_to_status(const char *s) {
     return strcmp(s, "done") == 0 ? STATUS_DONE : STATUS_PENDING;
-}
-
-// Helper: format time_t as ISO8601
-static char *time_to_iso8601(time_t t) {
-    struct tm tm;
-    gmtime_r(&t, &tm);
-    char *buf = malloc(21);
-    if (!buf) return NULL;
-    strftime(buf, 21, "%Y-%m-%dT%H:%M:%SZ", &tm);
-    return buf;
-}
-
-// Helper: parse ISO8601 to time_t
-static time_t iso8601_to_time(const char *s) {
-    struct tm tm = {0};
-    strptime(s, "%Y-%m-%dT%H:%M:%SZ", &tm);
-#ifdef _GNU_SOURCE
-    return timegm(&tm);
-#else
-    // timegm may be available on macOS
-    return timegm(&tm);
-#endif
 }
 
 Task *task_create(const char *name, time_t due, const char *tags[], size_t tag_count, Priority priority) {
@@ -102,12 +81,12 @@ char *task_to_json(const Task *t) {
     cJSON_AddStringToObject(obj, "id", t->id);
     cJSON_AddStringToObject(obj, "name", t->name);
 
-    char *created_str = time_to_iso8601(t->created);
+    char *created_str = utils_time_to_iso8601(t->created);
     cJSON_AddStringToObject(obj, "created", created_str);
     free(created_str);
 
     if (t->due > 0) {
-        char *due_str = time_to_iso8601(t->due);
+        char *due_str = utils_time_to_iso8601(t->due);
         cJSON_AddStringToObject(obj, "due", due_str);
         free(due_str);
     } else {
@@ -153,10 +132,10 @@ Task *task_from_json(const char *json_str) {
 
     t->id = strdup(id->valuestring);
     t->name = strdup(name->valuestring);
-    t->created = iso8601_to_time(created->valuestring);
+    t->created = utils_iso8601_to_time(created->valuestring);
 
     if (cJSON_IsString(due)) {
-        t->due = iso8601_to_time(due->valuestring);
+        t->due = utils_iso8601_to_time(due->valuestring);
     } else {
         t->due = 0;
     }
