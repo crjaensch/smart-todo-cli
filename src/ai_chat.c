@@ -4,6 +4,7 @@
 #include "storage.h"    // For loading/saving tasks
 #include "task.h"       // For task manipulation
 #include "utils.h"      // For common utilities
+#include "task_manager.h" // For centralized task management
 #include <cjson/cJSON.h> // For parsing LLM response
 #include <curses.h>    // For ncurses functions
 #include <stdio.h>
@@ -99,29 +100,27 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
             "---\n" \
             "Respond ONLY with a JSON object containing 'action' and parameters. " \
             "Valid actions: 'add_task' (name, due_date_iso?, tags?, priority?), 'mark_done' (index), 'delete_task' (index), 'edit_task' (index, name?, due_date_iso?, tags?, priority?), 'selected_task' (action, params), 'search_tasks' (term), 'sort_tasks' (field: name|due|prio), 'list_tasks' (no params), 'exit' (no params). " \
-            "'index' is 1-based from the displayed list. Use ISO 8601 for dates (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). Priority: low, medium, high."
-            );
+            "For dates, use ISO format YYYY-MM-DD.");
 
 end_prompt:
-    // Ensure null termination even if truncated
-    prompt_buf[buf_size - 1] = '\0';
+    return;
 }
 
 // --- Main AI Chat REPL Function ---
 
 int ai_chat_repl(void) {
-    // Initialize storage
-    if (storage_init() != 0) {
-        fprintf(stderr, "Failed to initialize storage.\n");
+    // Initialize task manager
+    if (task_manager_init() != 0) {
+        fprintf(stderr, "Failed to initialize task manager.\n");
         return 1;
     }
 
     // Load tasks
     size_t count = 0;
-    Task **tasks = storage_load_tasks(&count);
+    Task **tasks = task_manager_load_tasks(&count);
     if (!tasks) {
         // Allow starting with an empty list if file doesn't exist/is empty
-        tasks = calloc(1, sizeof(Task*)); // Need space for NULL terminator
+        tasks = utils_calloc(1, sizeof(Task*)); // Need space for NULL terminator
         if (!tasks) {
             fprintf(stderr, "Failed to allocate initial task list.\n");
             return 1;
@@ -134,8 +133,7 @@ int ai_chat_repl(void) {
     // Initialize UI
     if (ui_init() != 0) {
         fprintf(stderr, "Failed to initialize UI.\n");
-        storage_free_tasks(tasks, count);
-        free(tasks); // Free the list itself
+        task_manager_cleanup(tasks, count);
         return 1;
     }
 
@@ -150,8 +148,7 @@ int ai_chat_repl(void) {
         if (!disp) {
             // Handle allocation failure
             ui_teardown();
-            storage_free_tasks(tasks, count);
-            free(tasks);
+            task_manager_cleanup(tasks, count);
             fprintf(stderr, "Failed to allocate memory for display list.\n");
             return 1;
         }
@@ -416,242 +413,190 @@ int ai_chat_repl(void) {
                     due_time = utils_parse_date(due->valuestring);
                 }
 
-                // Create Task
-                Task *new_task = task_create(name->valuestring, due_time, tag_ptrs, tag_count, prio);
-                if (new_task) {
-                    // Allocate new array with space for the new task and NULL terminator
-                    Task **new_tasks = malloc((count + 2) * sizeof(Task*));
-                    if (new_tasks) {
-                        // Copy existing tasks to new array
-                        for (size_t i = 0; i < count; i++) {
-                            new_tasks[i] = tasks[i];
-                        }
-                        new_tasks[count] = new_task;
-                        new_tasks[count + 1] = NULL; // Keep list null-terminated
-                        
-                        // Free old array and update pointers
-                        free(tasks);
-                        tasks = new_tasks;
-                        count++;
-                        
-                        utils_show_message("Task added.", LINES - 2, 2);
-                    } else {
-                        // Allocation failed, clean up
-                        task_free(new_task);
-                        snprintf(last_error, MAX_ERR_LEN, "Error: Failed to allocate memory for new task.");
-                        free(disp); // Free display list before continuing
-                        continue;
-                    }
+                // Add task using task manager
+                if (task_manager_add_task(&tasks, &count, name->valuestring, due_time, tag_ptrs, tag_count, prio) == 0) {
+                    utils_show_message("Task added.", LINES - 2, 2);
                 } else {
-                     snprintf(last_error, MAX_ERR_LEN, "Failed to create task object.");
-                     free(disp); // Free display list before continuing
-                     continue;
+                    snprintf(last_error, MAX_ERR_LEN, "Failed to add task.");
+                    free(disp); // Free display list before continuing
+                    continue;
                 }
             } else {
                  snprintf(last_error, MAX_ERR_LEN, "Invalid params for add_task.");
                  free(disp); // Free display list before continuing
                  continue;
             }
-        }
-        else if (strcmp(action, "mark_done") == 0 || strcmp(action, "delete_task") == 0 || strcmp(action, "edit_task_status") == 0) {
+        } else if (strcmp(action, "delete_task") == 0) {
+            cJSON *index = cJSON_GetObjectItem(params, "index");
+            
+            if (cJSON_IsNumber(index) && index->valueint > 0 && index->valueint <= (int)disp_count) {
+                // Find the task in the original array
+                Task *target_task = disp[index->valueint - 1]; // Convert to 0-based
+                size_t task_index = 0;
+                
+                for (; task_index < count; task_index++) {
+                    if (tasks[task_index] == target_task) break;
+                }
+                
+                if (task_index < count) {
+                    if (task_manager_delete_task(&tasks, &count, task_index) == 0) {
+                        utils_show_message("Task deleted.", LINES - 2, 2);
+                        // Update selection if needed
+                        if (selected >= disp_count - 1 && selected > 0) {
+                            selected--;
+                        }
+                    } else {
+                        snprintf(last_error, MAX_ERR_LEN, "Failed to delete task.");
+                    }
+                } else {
+                    snprintf(last_error, MAX_ERR_LEN, "Task not found in original array.");
+                }
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Invalid index for delete_task.");
+            }
+        } else if (strcmp(action, "edit_task") == 0) {
+            cJSON *index = cJSON_GetObjectItem(params, "index");
+            
+            if (cJSON_IsNumber(index) && index->valueint > 0 && index->valueint <= (int)disp_count) {
+                Task *target_task = disp[index->valueint - 1]; // Convert to 0-based
+                
+                // Get optional edit fields
+                cJSON *name = cJSON_GetObjectItem(params, "name");
+                cJSON *due = cJSON_GetObjectItem(params, "due");
+                cJSON *tags = cJSON_GetObjectItem(params, "tags");
+                cJSON *priority = cJSON_GetObjectItem(params, "priority");
+                cJSON *status = cJSON_GetObjectItem(params, "status");
+                
+                // Parse name
+                const char *new_name = NULL;
+                if (cJSON_IsString(name) && name->valuestring[0] != '\0') {
+                    new_name = name->valuestring;
+                }
+                
+                // Parse due date
+                time_t due_time = -1; // -1 means don't change
+                if (due) {
+                    if (cJSON_IsString(due)) {
+                        due_time = utils_parse_date(due->valuestring);
+                    } else if (cJSON_IsNull(due)) {
+                        due_time = 0; // Explicit null means clear the due date
+                    }
+                }
+                
+                // Parse tags
+                const char *tag_ptrs[16]; // Max 16 tags
+                size_t tag_count = 0;
+                bool update_tags = false;
+                
+                if (tags && cJSON_IsArray(tags)) {
+                    update_tags = true;
+                    cJSON *tag_elem;
+                    cJSON_ArrayForEach(tag_elem, tags) {
+                        if (cJSON_IsString(tag_elem) && tag_count < 16) {
+                            tag_ptrs[tag_count++] = tag_elem->valuestring;
+                        }
+                    }
+                }
+                
+                // Parse priority
+                int prio = -1; // -1 means don't change
+                if (priority && cJSON_IsString(priority)) {
+                    if (strcasecmp(priority->valuestring, "high") == 0) prio = PRIORITY_HIGH;
+                    else if (strcasecmp(priority->valuestring, "medium") == 0) prio = PRIORITY_MEDIUM;
+                    else if (strcasecmp(priority->valuestring, "low") == 0) prio = PRIORITY_LOW;
+                }
+                
+                // Parse status
+                int task_status = -1; // -1 means don't change
+                if (status && cJSON_IsString(status)) {
+                    if (strcasecmp(status->valuestring, "done") == 0) task_status = STATUS_DONE;
+                    else if (strcasecmp(status->valuestring, "pending") == 0) task_status = STATUS_PENDING;
+                }
+                
+                // Update the task
+                if (task_manager_update_task(target_task, new_name, due_time, 
+                                           update_tags ? tag_ptrs : NULL, 
+                                           tag_count, prio, task_status) == 0) {
+                    utils_show_message("Task updated.", LINES - 2, 2);
+                } else {
+                    snprintf(last_error, MAX_ERR_LEN, "Failed to update task.");
+                }
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Invalid index for edit_task.");
+            }
+        } else if (strcmp(action, "mark_done") == 0) {
              cJSON *index_item = cJSON_GetObjectItem(params, "index");
              if (cJSON_IsNumber(index_item)) {
                  int index_1based = (int)index_item->valuedouble;
                  if (index_1based >= 1 && (size_t)index_1based <= disp_count) {
                      size_t index_0based = index_1based - 1;
                      Task *target_task = disp[index_0based]; // Get task from the *displayed* list
-
-                     if (strcmp(action, "mark_done") == 0) {
-                         target_task->status = STATUS_DONE;
+                    
+                     // Use task manager to update status
+                     if (task_manager_update_task(target_task, NULL, -1, NULL, 0, -1, STATUS_DONE) == 0) {
                          utils_show_message("Task marked done.", LINES - 2, 2);
-                     } else if (strcmp(action, "edit_task_status") == 0) {
-                          cJSON *status_item = cJSON_GetObjectItem(params, "status");
-                          if (cJSON_IsString(status_item)) {
-                              if (strcasecmp(status_item->valuestring, "done") == 0) {
-                                   target_task->status = STATUS_DONE;
-                                   utils_show_message("Task status updated.", LINES - 2, 2);
-                              } else if (strcasecmp(status_item->valuestring, "pending") == 0) {
-                                   target_task->status = STATUS_PENDING;
-                                   utils_show_message("Task status updated.", LINES - 2, 2);
-                              } else {
-                                   snprintf(last_error, MAX_ERR_LEN, "Invalid status value in edit_task_status.");
-                                   free(disp); // Free display list before continuing
-                                   continue;
-                              }
-                          } else {
-                               snprintf(last_error, MAX_ERR_LEN, "Missing 'status' param for edit_task_status.");
-                               free(disp); // Free display list before continuing
-                               continue;
-                          }
-                     } else { // delete_task
-                         // Find the task in the main 'tasks' list
-                         size_t main_idx = (size_t)-1;
-                         for (size_t i = 0; i < count; ++i) {
-                              if (tasks[i] == target_task) {
-                                   main_idx = i;
-                                   break;
-                              }
-                         }
-                         if (main_idx != (size_t)-1) {
-                              // Free the task to be deleted
-                              task_free(target_task);
-                              
-                              // Create a new array without the deleted task
-                              Task **new_tasks = NULL;
-                              if (count > 1) {
-                                  new_tasks = malloc((count) * sizeof(Task*));
-                                  if (!new_tasks) {
-                                      snprintf(last_error, MAX_ERR_LEN, "Error: Failed to allocate memory for task list.");
-                                      free(disp); // Free display list before continuing
-                                      continue;
-                                  }
-                                  
-                                  // Copy tasks, skipping the deleted one
-                                  size_t new_idx = 0;
-                                  for (size_t i = 0; i < count; i++) {
-                                      if (i != main_idx) {
-                                          new_tasks[new_idx++] = tasks[i];
-                                      }
-                                  }
-                                  new_tasks[count-1] = NULL; // Null terminate
-                              } else {
-                                  // If this was the last task, just allocate an empty array
-                                  new_tasks = calloc(1, sizeof(Task*));
-                                  if (!new_tasks) {
-                                      snprintf(last_error, MAX_ERR_LEN, "Error: Failed to allocate memory for empty task list.");
-                                      free(disp); // Free display list before continuing
-                                      continue;
-                                  }
-                                  new_tasks[0] = NULL; // Ensure null termination
-                              }
-                              
-                              // Update task list and count
-                              free(tasks);
-                              tasks = new_tasks;
-                              count--;
-                              utils_show_message("Task deleted.", LINES - 2, 2);
-                         } else {
-                              snprintf(last_error, MAX_ERR_LEN, "Task inconsistency: Cannot find displayed task in main list.");
-                              free(disp); // Free display list before continuing
-                              continue;
-                         }
+                     } else {
+                         snprintf(last_error, MAX_ERR_LEN, "Failed to mark task as done.");
                      }
                  } else {
                      // Provide more detailed error message with available task indices
                      char index_error[MAX_ERR_LEN];
-                     snprintf(index_error, MAX_ERR_LEN, 
-                              "Invalid index %d provided. Available task indices are 1-%zu. Please check the task list and use a valid index.", 
-                              index_1based, disp_count);
+                     snprintf(index_error, MAX_ERR_LEN, "Invalid index %d. Valid range: 1-%zu.", index_1based, disp_count);
                      snprintf(last_error, MAX_ERR_LEN, "%s", index_error);
                      free(disp); // Free display list before continuing
                      continue;
                  }
              } else {
-                 snprintf(last_error, MAX_ERR_LEN, "Missing/invalid 'index' param for %s.", action);
+                 snprintf(last_error, MAX_ERR_LEN, "Missing/invalid 'index' param for mark_done.");
                  free(disp); // Free display list before continuing
                  continue;
              }
-        }
-         else if (strcmp(action, "edit_task") == 0) {
+        } else if (strcmp(action, "edit_task_status") == 0) {
              cJSON *index_item = cJSON_GetObjectItem(params, "index");
              if (cJSON_IsNumber(index_item)) {
                  int index_1based = (int)index_item->valuedouble;
-                 if (index_1based >= 1 && (size_t)index_1based <= disp_count) {
+                 if (index_1based > 0 && index_1based <= (int)disp_count) {
                      size_t index_0based = index_1based - 1;
                      Task *target_task = disp[index_0based]; // Get task from the *displayed* list
-                     
-                     // Update name if provided
-                     cJSON *name_item = cJSON_GetObjectItem(params, "name");
-                     if (cJSON_IsString(name_item) && name_item->valuestring[0] != '\0') {
-                         free(target_task->name);
-                         target_task->name = strdup(name_item->valuestring);
-                     }
-                     
-                     // Update due date if provided (check both "due" and "due_date_iso" for compatibility)
-                     cJSON *due_item = cJSON_GetObjectItem(params, "due_date_iso");
-                     if (!due_item) {
-                         due_item = cJSON_GetObjectItem(params, "due"); // Try alternative parameter name
-                     }
-                     
-                     if (due_item) {
-                         if (cJSON_IsString(due_item) && due_item->valuestring[0] != '\0') {
-                             target_task->due = utils_parse_date(due_item->valuestring);
-                         } else if (cJSON_IsNull(due_item)) {
-                             target_task->due = 0; // Clear due date
-                         }
-                     }
-                     
-                     // Update tags if provided
-                     cJSON *tags_item = cJSON_GetObjectItem(params, "tags");
-                     if (tags_item && cJSON_IsArray(tags_item)) {
-                         // Free existing tags
-                         for (size_t i = 0; i < target_task->tag_count; ++i) {
-                             free(target_task->tags[i]);
-                         }
-                         
-                         // Count new tags
-                         size_t new_tag_count = cJSON_GetArraySize(tags_item);
-                         
-                         // Allocate and copy new tags
-                         if (new_tag_count > 0) {
-                             target_task->tags = realloc(target_task->tags, new_tag_count * sizeof(char*));
-                             target_task->tag_count = new_tag_count;
-                             
-                             for (size_t i = 0; i < new_tag_count; ++i) {
-                                 cJSON *tag_item = cJSON_GetArrayItem(tags_item, i);
-                                 if (cJSON_IsString(tag_item)) {
-                                     target_task->tags[i] = strdup(tag_item->valuestring);
-                                 } else {
-                                     target_task->tags[i] = strdup(""); // Empty string for non-string items
-                                 }
-                             }
-                         } else {
-                             free(target_task->tags);
-                             target_task->tags = NULL;
-                             target_task->tag_count = 0;
-                         }
-                     }
-                     
-                     // Update priority if provided
-                     cJSON *priority_item = cJSON_GetObjectItem(params, "priority");
-                     if (priority_item && cJSON_IsString(priority_item)) {
-                         if (strcasecmp(priority_item->valuestring, "high") == 0) {
-                             target_task->priority = PRIORITY_HIGH;
-                         } else if (strcasecmp(priority_item->valuestring, "medium") == 0) {
-                             target_task->priority = PRIORITY_MEDIUM;
-                         } else {
-                             target_task->priority = PRIORITY_LOW;
-                         }
-                     }
 
-                     // Update status if provided
                      cJSON *status_item = cJSON_GetObjectItem(params, "status");
-                     if (status_item && cJSON_IsString(status_item)) {
+                     if (cJSON_IsString(status_item)) {
+                         int new_status = -1;
                          if (strcasecmp(status_item->valuestring, "done") == 0) {
-                             target_task->status = STATUS_DONE;
+                             new_status = STATUS_DONE;
+                         } else if (strcasecmp(status_item->valuestring, "pending") == 0) {
+                             new_status = STATUS_PENDING;
                          } else {
-                             target_task->status = STATUS_PENDING;
+                             snprintf(last_error, MAX_ERR_LEN, "Invalid status value in edit_task_status.");
+                             free(disp); // Free display list before continuing
+                             continue;
                          }
+                         
+                         // Use task manager to update status
+                         if (task_manager_update_task(target_task, NULL, -1, NULL, 0, -1, new_status) == 0) {
+                             utils_show_message("Task status updated.", LINES - 2, 2);
+                         } else {
+                             snprintf(last_error, MAX_ERR_LEN, "Failed to update task status.");
+                         }
+                     } else {
+                         snprintf(last_error, MAX_ERR_LEN, "Missing 'status' param for edit_task_status.");
+                         free(disp); // Free display list before continuing
+                         continue;
                      }
-                     
-                     utils_show_message("Task updated successfully.", LINES - 2, 2);
                  } else {
                      // Provide more detailed error message with available task indices
                      char index_error[MAX_ERR_LEN];
-                     snprintf(index_error, MAX_ERR_LEN, 
-                              "Invalid index %d provided. Available task indices are 1-%zu. Please check the task list and use a valid index.", 
-                              index_1based, disp_count);
+                     snprintf(index_error, MAX_ERR_LEN, "Invalid index %d. Valid range: 1-%zu.", index_1based, disp_count);
                      snprintf(last_error, MAX_ERR_LEN, "%s", index_error);
                      free(disp); // Free display list before continuing
                      continue;
                  }
              } else {
-                 snprintf(last_error, MAX_ERR_LEN, "Missing/invalid 'index' param for edit_task.");
+                 snprintf(last_error, MAX_ERR_LEN, "Missing/invalid 'index' param for edit_task_status.");
                  free(disp); // Free display list before continuing
                  continue;
              }
-         }
-         else if (strcmp(action, "selected_task") == 0) {
+        } else if (strcmp(action, "selected_task") == 0) {
              // Handle actions on the currently selected task
              if (disp_count == 0) {
                  snprintf(last_error, MAX_ERR_LEN, "No tasks available to select.");
@@ -659,246 +604,162 @@ int ai_chat_repl(void) {
                  continue;
              }
              
+             if (selected >= disp_count) {
+                 snprintf(last_error, MAX_ERR_LEN, "Invalid selection index.");
+                 free(disp); // Free display list before continuing
+                 continue;
+             }
+             
              // Get the nested action and params
              cJSON *nested_action_item = cJSON_GetObjectItem(params, "action");
              cJSON *nested_params_item = cJSON_GetObjectItem(params, "params");
-             
+
              if (!cJSON_IsString(nested_action_item) || !cJSON_IsObject(nested_params_item)) {
                  snprintf(last_error, MAX_ERR_LEN, "selected_task requires 'action' and 'params' fields.");
-                 free(disp);
+                 free(disp); // Free display list before continuing
                  continue;
              }
              
              const char *nested_action = nested_action_item->valuestring;
              cJSON *nested_params = nested_params_item;
              
-             // Create a new params object with the index of the selected task
-             cJSON *modified_params = cJSON_Duplicate(nested_params, 1);
-             if (!modified_params) {
-                 snprintf(last_error, MAX_ERR_LEN, "Failed to create parameters for selected task action.");
-                 free(disp);
-                 continue;
-             }
-             
-             // Add the index of the selected task
-             cJSON_AddNumberToObject(modified_params, "index", selected + 1); // 1-based index
-             
-             // Create a temporary string representation for logging
-             char *temp_str = cJSON_PrintUnformatted(modified_params);
-             if (temp_str) {
-                 free(temp_str);
-             }
-             
-             // Handle the nested action with the modified params
+             // Handle the nested action on the selected task
+             Task *selected_task = disp[selected];
+            
              if (strcmp(nested_action, "mark_done") == 0) {
-                 // Mark the selected task as done
-                 Task *target_task = disp[selected];
-                 target_task->status = STATUS_DONE;
-                 utils_show_message("Selected task marked done.", LINES - 2, 2);
-             }
-             else if (strcmp(nested_action, "delete_task") == 0) {
-                 // Delete the selected task
-                 Task *target_task = disp[selected];
-                 
-                 // Find the task in the main 'tasks' list
-                 size_t main_idx = (size_t)-1;
-                 for (size_t i = 0; i < count; ++i) {
-                     if (tasks[i] == target_task) {
-                         main_idx = i;
-                         break;
-                     }
-                 }
-                 
-                 if (main_idx != (size_t)-1) {
-                     // Free the task to be deleted
-                     task_free(target_task);
-                     
-                     // Create a new array without the deleted task
-                     Task **new_tasks = NULL;
-                     if (count > 1) {
-                         new_tasks = malloc((count) * sizeof(Task*));
-                         if (!new_tasks) {
-                             snprintf(last_error, MAX_ERR_LEN, "Error: Failed to allocate memory for task list.");
-                             free(disp);
-                             cJSON_Delete(modified_params);
-                             continue;
-                         }
-                         
-                         // Copy tasks, skipping the deleted one
-                         size_t new_idx = 0;
-                         for (size_t i = 0; i < count; i++) {
-                             if (i != main_idx) {
-                                 new_tasks[new_idx++] = tasks[i];
-                             }
-                         }
-                         new_tasks[count-1] = NULL; // Null terminate
-                     } else {
-                         // If this was the last task, just allocate an empty array
-                         new_tasks = calloc(1, sizeof(Task*));
-                         if (!new_tasks) {
-                             snprintf(last_error, MAX_ERR_LEN, "Error: Failed to allocate memory for empty task list.");
-                             free(disp);
-                             cJSON_Delete(modified_params);
-                             continue;
-                         }
-                         new_tasks[0] = NULL; // Ensure null termination
-                     }
-                     
-                     // Update task list and count
-                     free(tasks);
-                     tasks = new_tasks;
-                     count--;
-                     utils_show_message("Selected task deleted.", LINES - 2, 2);
+                 // Update task status using task manager
+                 if (task_manager_update_task(selected_task, NULL, -1, NULL, 0, -1, STATUS_DONE) == 0) {
+                     utils_show_message("Selected task marked as done.", LINES - 2, 2);
                  } else {
-                     snprintf(last_error, MAX_ERR_LEN, "Task inconsistency: Cannot find selected task in main list.");
-                     free(disp);
-                     cJSON_Delete(modified_params);
-                     continue;
+                     snprintf(last_error, MAX_ERR_LEN, "Failed to mark selected task as done.");
                  }
-             }
-             else if (strcmp(nested_action, "edit_task") == 0) {
-                 // Edit the selected task
-                 Task *target_task = disp[selected];
-                 
-                 // Update name if provided
-                 cJSON *name_item = cJSON_GetObjectItem(modified_params, "name");
-                 if (cJSON_IsString(name_item) && name_item->valuestring[0] != '\0') {
-                     free(target_task->name);
-                     target_task->name = strdup(name_item->valuestring);
+             } else if (strcmp(nested_action, "delete_task") == 0) {
+                 // Find the task in the original array
+                 size_t task_index = 0;
+                 for (; task_index < count; task_index++) {
+                     if (tasks[task_index] == selected_task) break;
                  }
                  
-                 // Update due date if provided (check both "due" and "due_date_iso" for compatibility)
-                 cJSON *due_item = cJSON_GetObjectItem(modified_params, "due_date_iso");
-                 if (!due_item) {
-                     due_item = cJSON_GetObjectItem(modified_params, "due"); // Try alternative parameter name
-                 }
-                 
-                 if (due_item) {
-                     if (cJSON_IsString(due_item) && due_item->valuestring[0] != '\0') {
-                         target_task->due = utils_parse_date(due_item->valuestring);
-                     } else if (cJSON_IsNull(due_item)) {
-                         target_task->due = 0; // Clear due date
-                     }
-                 }
-                 
-                 // Update tags if provided
-                 cJSON *tags_item = cJSON_GetObjectItem(modified_params, "tags");
-                 if (tags_item && cJSON_IsArray(tags_item)) {
-                     // Free existing tags
-                     for (size_t i = 0; i < target_task->tag_count; ++i) {
-                         free(target_task->tags[i]);
-                     }
-                     
-                     // Count new tags
-                     size_t new_tag_count = cJSON_GetArraySize(tags_item);
-                     
-                     // Allocate and copy new tags
-                     if (new_tag_count > 0) {
-                         target_task->tags = realloc(target_task->tags, new_tag_count * sizeof(char*));
-                         target_task->tag_count = new_tag_count;
-                         
-                         for (size_t i = 0; i < new_tag_count; ++i) {
-                             cJSON *tag_item = cJSON_GetArrayItem(tags_item, i);
-                             if (cJSON_IsString(tag_item)) {
-                                 target_task->tags[i] = strdup(tag_item->valuestring);
-                             } else {
-                                 target_task->tags[i] = strdup(""); // Empty string for non-string items
-                             }
+                 if (task_index < count) {
+                     if (task_manager_delete_task(&tasks, &count, task_index) == 0) {
+                         utils_show_message("Selected task deleted.", LINES - 2, 2);
+                         // Update selection if needed
+                         if (selected >= disp_count - 1 && selected > 0) {
+                             selected--;
                          }
                      } else {
-                         free(target_task->tags);
-                         target_task->tags = NULL;
-                         target_task->tag_count = 0;
+                         snprintf(last_error, MAX_ERR_LEN, "Failed to delete selected task.");
                      }
-                 }
-                 
-                 // Update priority if provided
-                 cJSON *priority_item = cJSON_GetObjectItem(modified_params, "priority");
-                 if (priority_item && cJSON_IsString(priority_item)) {
-                     if (strcasecmp(priority_item->valuestring, "high") == 0) {
-                         target_task->priority = PRIORITY_HIGH;
-                     } else if (strcasecmp(priority_item->valuestring, "medium") == 0) {
-                         target_task->priority = PRIORITY_MEDIUM;
-                     } else {
-                         target_task->priority = PRIORITY_LOW;
-                     }
-                 }
-
-                 // Update status if provided
-                 cJSON *status_item = cJSON_GetObjectItem(modified_params, "status");
-                 if (status_item && cJSON_IsString(status_item)) {
-                     if (strcasecmp(status_item->valuestring, "done") == 0) {
-                         target_task->status = STATUS_DONE;
-                     } else {
-                         target_task->status = STATUS_PENDING;
-                     }
-                 }
-                 
-                 utils_show_message("Selected task updated successfully.", LINES - 2, 2);
-             }
-             else {
-                 snprintf(last_error, MAX_ERR_LEN, "Unknown nested action '%s' for selected_task.", nested_action);
-                 free(disp);
-                 cJSON_Delete(modified_params);
-                 continue;
-             }
-             
-             // Clean up
-             cJSON_Delete(modified_params);
-         }
-         else if (strcmp(action, "search_tasks") == 0) {
-             cJSON *term_item = cJSON_GetObjectItem(params, "term");
-             if (cJSON_IsString(term_item)) {
-                 strncpy(search_term, term_item->valuestring, sizeof(search_term) - 1);
-                 search_term[sizeof(search_term) - 1] = '\0'; // Ensure null termination
-                 utils_show_message("Search applied.", LINES - 2, 2);
-             } else if (cJSON_IsNull(term_item)) {
-                  search_term[0] = '\0'; // Clear search
-                  utils_show_message("Search cleared.", LINES - 2, 2);
-             } else {
-                  snprintf(last_error, MAX_ERR_LEN, "Invalid 'term' param for search_tasks.");
-                  free(disp); // Free display list before continuing
-                  continue;
-             }
-             selected = 0; // Reset selection on search change
-         }
-         else if (strcmp(action, "list_tasks") == 0) {
-             search_term[0] = '\0'; // Clear search term
-             selected = 0;
-             utils_show_message("Displaying all tasks.", LINES - 2, 2);
-         }
-         else if (strcmp(action, "sort_tasks") == 0) {
-             cJSON *by_item = cJSON_GetObjectItem(params, "by");
-             if (cJSON_IsString(by_item)) {
-                 const char *sort_key = by_item->valuestring;
-                 int (*compare_func)(const void *, const void *) = NULL;
-                 if (strcmp(sort_key, "name") == 0) compare_func = task_compare_by_name;
-                 else if (strcmp(sort_key, "due") == 0) compare_func = task_compare_by_due;
-                 else if (strcmp(sort_key, "creation") == 0) compare_func = task_compare_by_creation;
-
-                 if (compare_func) {
-                     qsort(tasks, count, sizeof(Task*), compare_func);
-                     utils_show_message("Tasks sorted.", LINES - 2, 2);
                  } else {
-                     snprintf(last_error, MAX_ERR_LEN, "Invalid 'by' value '%s' for sort_tasks.", sort_key);
-                     cJSON_Delete(root);
-                     free(disp); // Free display list before continuing
-                     continue;
+                     snprintf(last_error, MAX_ERR_LEN, "Selected task not found in original array.");
+                 }
+             } else if (strcmp(nested_action, "edit_task") == 0) {
+                 // Get optional edit fields
+                 cJSON *name = cJSON_GetObjectItem(nested_params, "name");
+                 cJSON *due = cJSON_GetObjectItem(nested_params, "due");
+                 cJSON *tags = cJSON_GetObjectItem(nested_params, "tags");
+                 cJSON *priority = cJSON_GetObjectItem(nested_params, "priority");
+                 cJSON *status = cJSON_GetObjectItem(nested_params, "status");
+                 
+                 // Parse name
+                 const char *new_name = NULL;
+                 if (cJSON_IsString(name) && name->valuestring[0] != '\0') {
+                     new_name = name->valuestring;
+                 }
+                 
+                 // Parse due date
+                 time_t due_time = -1; // -1 means don't change
+                 if (due) {
+                     if (cJSON_IsString(due)) {
+                         due_time = utils_parse_date(due->valuestring);
+                     } else if (cJSON_IsNull(due)) {
+                         due_time = 0; // Explicit null means clear the due date
+                     }
+                 }
+                 
+                 // Parse tags
+                 const char *tag_ptrs[16]; // Max 16 tags
+                 size_t tag_count = 0;
+                 bool update_tags = false;
+                 
+                 if (tags && cJSON_IsArray(tags)) {
+                     update_tags = true;
+                     cJSON *tag_elem;
+                     cJSON_ArrayForEach(tag_elem, tags) {
+                         if (cJSON_IsString(tag_elem) && tag_count < 16) {
+                             tag_ptrs[tag_count++] = tag_elem->valuestring;
+                         }
+                     }
+                 }
+                 
+                 // Parse priority
+                 int prio = -1; // -1 means don't change
+                 if (priority && cJSON_IsString(priority)) {
+                     if (strcasecmp(priority->valuestring, "high") == 0) prio = PRIORITY_HIGH;
+                     else if (strcasecmp(priority->valuestring, "medium") == 0) prio = PRIORITY_MEDIUM;
+                     else if (strcasecmp(priority->valuestring, "low") == 0) prio = PRIORITY_LOW;
+                 }
+                 
+                 // Parse status
+                 int task_status = -1; // -1 means don't change
+                 if (status && cJSON_IsString(status)) {
+                     if (strcasecmp(status->valuestring, "done") == 0) task_status = STATUS_DONE;
+                     else if (strcasecmp(status->valuestring, "pending") == 0) task_status = STATUS_PENDING;
+                 }
+                 
+                 // Update the task
+                 if (task_manager_update_task(selected_task, new_name, due_time, 
+                                            update_tags ? tag_ptrs : NULL, 
+                                            tag_count, prio, task_status) == 0) {
+                     utils_show_message("Selected task updated.", LINES - 2, 2);
+                 } else {
+                     snprintf(last_error, MAX_ERR_LEN, "Failed to update selected task.");
                  }
              } else {
-                 snprintf(last_error, MAX_ERR_LEN, "Missing 'by' param for sort_tasks.");
-                 cJSON_Delete(root);
+                 snprintf(last_error, MAX_ERR_LEN, "Unsupported action for selected_task: %s", nested_action);
+             }
+        } else if (strcmp(action, "sort_tasks") == 0) {
+            cJSON *by_item = cJSON_GetObjectItem(params, "by");
+            if (cJSON_IsString(by_item)) {
+                if (strcasecmp(by_item->valuestring, "name") == 0) {
+                    task_manager_sort_by_name(tasks, count);
+                    utils_show_message("Tasks sorted by name.", LINES - 2, 2);
+                } else if (strcasecmp(by_item->valuestring, "due") == 0 || 
+                           strcasecmp(by_item->valuestring, "creation") == 0) {
+                    task_manager_sort_by_due(tasks, count);
+                    utils_show_message("Tasks sorted by due date.", LINES - 2, 2);
+                } else {
+                    snprintf(last_error, MAX_ERR_LEN, "Invalid sort field: %s. Use 'name', 'due', or 'creation'.", by_item->valuestring);
+                }
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Missing 'by' parameter for sort_tasks.");
+            }
+        } else if (strcmp(action, "search_tasks") == 0) {
+            cJSON *term_item = cJSON_GetObjectItem(params, "term");
+            if (cJSON_IsString(term_item)) {
+                strncpy(search_term, term_item->valuestring, sizeof(search_term) - 1);
+                search_term[sizeof(search_term) - 1] = '\0'; // Ensure null termination
+                utils_show_message("Search applied.", LINES - 2, 2);
+            } else if (cJSON_IsNull(term_item)) {
+                 search_term[0] = '\0'; // Clear search
+                 utils_show_message("Search cleared.", LINES - 2, 2);
+            } else {
+                 snprintf(last_error, MAX_ERR_LEN, "Invalid 'term' param for search_tasks.");
                  free(disp); // Free display list before continuing
                  continue;
-             }
-         }
-         else if (strcmp(action, "exit") == 0) {
-             // Handle explicit exit action from the LLM
-             utils_show_message("Exiting AI chat mode...", LINES - 2, 1);
-             cJSON_Delete(root);
-             free(disp);
-             break; // Exit the main loop
-         }
+            }
+            selected = 0; // Reset selection on search change
+        } else if (strcmp(action, "list_tasks") == 0) {
+            search_term[0] = '\0'; // Clear search term
+            selected = 0;
+            utils_show_message("Displaying all tasks.", LINES - 2, 2);
+        } else if (strcmp(action, "exit") == 0) {
+            // Handle explicit exit action from the LLM
+            utils_show_message("Exiting AI chat mode...", LINES - 2, 1);
+            cJSON_Delete(root);
+            free(disp);
+            break; // Exit the main loop
+        }
         else {
             snprintf(last_error, MAX_ERR_LEN, "Unknown action '%s' received from AI.", action);
             cJSON_Delete(root);
@@ -914,11 +775,11 @@ int ai_chat_repl(void) {
     ui_teardown();
 
     // Save tasks before exiting
-    if (storage_save_tasks(tasks, count) != 0) {
+    if (task_manager_save_tasks(tasks, count) != 0) {
         // Don't print to stderr as ncurses is torn down. Maybe log?
     }
 
-    storage_free_tasks(tasks, count);
+    task_manager_cleanup(tasks, count);
 
     printf("Exiting AI chat mode.\n"); // Print after ncurses is done
     return 0;

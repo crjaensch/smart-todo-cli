@@ -1,6 +1,6 @@
-# Smart Todo CLI
+# Smart Todo TUI
 
-A minimalistic command-line todo app with AI assistance. Manage your tasks efficiently with natural language processing and a clean terminal interface.
+A minimalistic terminal user interface (TUI) todo app with AI assistance. Manage your tasks efficiently with natural language processing and a clean terminal interface.
 
 ## Features
 
@@ -16,7 +16,7 @@ The standard mode provides an interactive terminal interface for managing your t
 
 ### AI-Assisted Modes
 
-Smart Todo CLI offers two AI-powered modes for enhanced productivity:
+Smart Todo TUI offers two AI-powered modes for enhanced productivity:
 
 #### Quick AI Add Mode
 
@@ -95,8 +95,8 @@ In AI chat mode, you can use natural language commands like:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/smart-todo-cli.git
-cd smart-todo-cli
+git clone https://github.com/yourusername/smart-todo-tui.git
+cd smart-todo-tui
 
 # Navigate to the src directory and build
 cd src
