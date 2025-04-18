@@ -103,6 +103,31 @@ size_t task_manager_filter_by_search(Task **tasks, size_t count,
                                     Task **filtered_tasks);
 
 /**
+ * Filter tasks by date range
+ * @param tasks Source task array
+ * @param count Number of tasks in source array
+ * @param start_date Start of date range (inclusive, 0 for no lower bound)
+ * @param end_date End of date range (inclusive, 0 for no upper bound)
+ * @param filtered_tasks Output array for filtered tasks (must be pre-allocated)
+ * @return Number of tasks in filtered array
+ */
+size_t task_manager_filter_by_date_range(Task **tasks, size_t count, 
+                                        time_t start_date, time_t end_date,
+                                        Task **filtered_tasks);
+
+/**
+ * Filter tasks by predefined date range
+ * @param tasks Source task array
+ * @param count Number of tasks in source array
+ * @param range_type Predefined range: "today", "tomorrow", "this_week", "next_week", "overdue"
+ * @param filtered_tasks Output array for filtered tasks (must be pre-allocated)
+ * @return Number of tasks in filtered array
+ */
+size_t task_manager_filter_by_date_preset(Task **tasks, size_t count, 
+                                         const char *range_type,
+                                         Task **filtered_tasks);
+
+/**
  * Clean up task manager resources
  * @param tasks Task array to free
  * @param count Number of tasks

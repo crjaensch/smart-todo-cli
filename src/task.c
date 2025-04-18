@@ -276,18 +276,14 @@ int task_compare_by_due(const void *a, const void *b) {
     
     // If both have no due date, compare by creation time
     if (t1->due == 0 && t2->due == 0)
-        return task_compare_by_creation(a, b);
+        return (t1->created > t2->created) - (t1->created < t2->created);
         
     // Tasks with no due date go last
     if (t1->due == 0) return 1;
     if (t2->due == 0) return -1;
     
     // Compare due dates
-    if (t1->due < t2->due) return -1;
-    if (t1->due > t2->due) return 1;
-    
-    // If due dates are equal, compare by creation time
-    return task_compare_by_creation(a, b);
+    return (t1->due > t2->due) - (t1->due < t2->due);
 }
 
 bool task_has_tag(const Task *t, const char *tag) {
@@ -302,16 +298,195 @@ bool task_has_status(const Task *t, Status status) {
     return t && t->status == status;
 }
 
-bool task_matches_search(const Task *t, const char *search_term) {
-    if (!t || !search_term || search_term[0] == '\0') return false;
+// Helper function to check if a task matches a specific filter
+static bool task_matches_filter(const Task *t, const char *filter) {
+    if (!t || !filter || filter[0] == '\0') return false;
     
-    // Check name
-    if (t->name && strcasestr(t->name, search_term)) return true;
+    // Date filters
+    if (strncmp(filter, "date:today", 10) == 0) {
+        // Filter for tasks due today
+        time_t now = time(NULL);
+        struct tm tm_now, tm_due;
+        localtime_r(&now, &tm_now);
+        
+        // Skip tasks with no due date
+        if (t->due == 0) return false;
+        
+        localtime_r(&t->due, &tm_due);
+        
+        // Check if due date is today
+        return (tm_now.tm_year == tm_due.tm_year && 
+                tm_now.tm_mon == tm_due.tm_mon && 
+                tm_now.tm_mday == tm_due.tm_mday);
+    }
+    else if (strncmp(filter, "date:tomorrow", 13) == 0) {
+        // Filter for tasks due tomorrow
+        time_t now = time(NULL);
+        time_t tomorrow = now + 24 * 60 * 60; // Add one day in seconds
+        struct tm tm_tomorrow, tm_due;
+        localtime_r(&tomorrow, &tm_tomorrow);
+        
+        // Skip tasks with no due date
+        if (t->due == 0) return false;
+        
+        localtime_r(&t->due, &tm_due);
+        
+        // Check if due date is tomorrow
+        return (tm_tomorrow.tm_year == tm_due.tm_year && 
+                tm_tomorrow.tm_mon == tm_due.tm_mon && 
+                tm_tomorrow.tm_mday == tm_due.tm_mday);
+    }
+    else if (strncmp(filter, "date:this_week", 14) == 0) {
+        // Filter for tasks due this week (today through Sunday)
+        time_t now = time(NULL);
+        struct tm tm_now, tm_due;
+        localtime_r(&now, &tm_now);
+        
+        // Skip tasks with no due date
+        if (t->due == 0) return false;
+        
+        localtime_r(&t->due, &tm_due);
+        
+        // Calculate start of today
+        struct tm tm_start = tm_now;
+        tm_start.tm_hour = 0;
+        tm_start.tm_min = 0;
+        tm_start.tm_sec = 0;
+        time_t start_time = mktime(&tm_start);
+        
+        // Calculate end of week (end of Sunday)
+        int days_to_end = 7 - tm_now.tm_wday;
+        if (days_to_end == 0) days_to_end = 7; // If today is Sunday, go to next Sunday
+        time_t end_of_week = start_time + days_to_end * 24 * 60 * 60 - 1; // -1 to get 23:59:59
+        
+        // Check if due date is within this week
+        return (t->due >= start_time && t->due <= end_of_week);
+    }
+    else if (strncmp(filter, "date:next_week", 14) == 0) {
+        // Filter for tasks due next week (next Monday through Sunday)
+        time_t now = time(NULL);
+        struct tm tm_now, tm_due;
+        localtime_r(&now, &tm_now);
+        
+        // Skip tasks with no due date
+        if (t->due == 0) return false;
+        
+        localtime_r(&t->due, &tm_due);
+        
+        // Calculate days until next Monday
+        int days_to_monday = (7 - tm_now.tm_wday + 1) % 7;
+        if (days_to_monday == 0) days_to_monday = 7; // If today is Monday, go to next Monday
+        
+        // Calculate start of next Monday
+        struct tm tm_start = tm_now;
+        tm_start.tm_hour = 0;
+        tm_start.tm_min = 0;
+        tm_start.tm_sec = 0;
+        time_t next_monday = mktime(&tm_start) + days_to_monday * 24 * 60 * 60;
+        
+        // Calculate end of next Sunday
+        time_t next_sunday = next_monday + 7 * 24 * 60 * 60 - 1; // -1 to get 23:59:59
+        
+        // Check if due date is within next week
+        return (t->due >= next_monday && t->due <= next_sunday);
+    }
+    else if (strncmp(filter, "date:overdue", 12) == 0) {
+        // Filter for overdue tasks (due before today)
+        time_t now = time(NULL);
+        struct tm tm_now;
+        localtime_r(&now, &tm_now);
+        
+        // Skip tasks with no due date
+        if (t->due == 0) return false;
+        
+        // Calculate start of today
+        tm_now.tm_hour = 0;
+        tm_now.tm_min = 0;
+        tm_now.tm_sec = 0;
+        time_t start_of_today = mktime(&tm_now);
+        
+        // Check if due date is before today
+        return (t->due < start_of_today);
+    }
+    // Priority filters
+    else if (strncmp(filter, "priority:high", 13) == 0) {
+        return t->priority == PRIORITY_HIGH;
+    }
+    else if (strncmp(filter, "priority:medium", 15) == 0) {
+        return t->priority == PRIORITY_MEDIUM;
+    }
+    else if (strncmp(filter, "priority:low", 12) == 0) {
+        return t->priority == PRIORITY_LOW;
+    }
+    // Status filters
+    else if (strncmp(filter, "status:done", 11) == 0) {
+        return t->status == STATUS_DONE;
+    }
+    else if (strncmp(filter, "status:pending", 14) == 0) {
+        return t->status == STATUS_PENDING;
+    }
+    
+    // If it's not a recognized filter, check if it matches name or tags
+    if (t->name && strcasestr(t->name, filter)) return true;
     
     // Check tags
     for (size_t i = 0; i < t->tag_count; ++i) {
-        if (strcasestr(t->tags[i], search_term)) return true;
+        if (strcasestr(t->tags[i], filter)) return true;
     }
     
     return false;
+}
+
+bool task_matches_search(const Task *t, const char *search_term) {
+    if (!t || !search_term || search_term[0] == '\0') return false;
+    
+    // Special handling for filter search terms
+    if (search_term[0] == '[') {
+        // Check if this is a combined filter with format [filter1][filter2]...
+        if (strchr(search_term, ']') && strchr(search_term, ']') + 1 < search_term + strlen(search_term) && *(strchr(search_term, ']') + 1) == '[') {
+            // This is a combined filter
+            char filter_copy[256];
+            strncpy(filter_copy, search_term, sizeof(filter_copy) - 1);
+            filter_copy[sizeof(filter_copy) - 1] = '\0';
+            
+            char *filter_start = filter_copy;
+            bool match_all = true;
+            
+            while (filter_start && *filter_start) {
+                // Extract individual filter
+                if (*filter_start != '[') break;
+                
+                char *filter_end = strchr(filter_start, ']');
+                if (!filter_end) break;
+                
+                *filter_end = '\0'; // Terminate the filter string
+                char *filter = filter_start + 1; // Skip the '['
+                
+                // Check if task matches this filter
+                if (!task_matches_filter(t, filter)) {
+                    match_all = false;
+                    break;
+                }
+                
+                // Move to next filter
+                filter_start = filter_end + 1;
+            }
+            
+            return match_all;
+        }
+        // Single filter in format [filter]
+        else {
+            // Extract filter without brackets
+            char filter[256];
+            size_t len = strlen(search_term);
+            if (len >= 3 && search_term[len-1] == ']') {
+                strncpy(filter, search_term + 1, len - 2);
+                filter[len - 2] = '\0';
+                return task_matches_filter(t, filter);
+            }
+        }
+    }
+    
+    // Regular search - check name and tags
+    return task_matches_filter(t, search_term);
 }

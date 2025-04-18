@@ -49,7 +49,7 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
              "- Output exactly one JSON object: {\"action\": \"ACTION_NAME\", \"params\": {PARAM_DICT}}. No extra text.\n"
              "- For actions targeting a specific task (mark, delete, edit), use the 'index' parameter, referring to the 1-based index shown in the 'Current Tasks' list.\n"
              "- IMPORTANT: Only use task indices that are explicitly shown in the current task list. Do not reference tasks by absolute indices that may have changed.\n"
-             "- To reference the currently selected task (marked with an arrow → and 'SELECTED' in the list), use the 'selected_task' action.\n"
+             "- To reference the currently selected task (marked with an arrow \u2192 and 'SELECTED' in the list), use the 'selected_task' action.\n"
              "\n"
              "Supported Actions & Params:\n"
              " add_task: { \"name\": string, \"due\": \"YYYY-MM-DD\" | null, \"tags\": [string], \"priority\": \"low\"|\"medium\"|\"high\" }\n"
@@ -58,6 +58,10 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
              " edit_task: { \"index\": number, \"name\": string?, \"due\": \"YYYY-MM-DD\" | null?, \"tags\": [string]?, \"priority\": string?, \"status\": string? }\n"
              " selected_task: { \"action\": \"mark_done\" | \"delete_task\" | \"edit_task\", \"params\": {...} } (Apply an action to the currently selected task)\n"
              " search_tasks: { \"term\": string | null } (null term clears search)\n"
+             " filter_by_date: { \"range\": \"today\"|\"tomorrow\"|\"this_week\"|\"next_week\"|\"overdue\" } (Filter tasks by date range)\n"
+             " filter_by_priority: { \"level\": \"high\"|\"medium\"|\"low\" } (Filter tasks by priority)\n"
+             " filter_by_status: { \"status\": \"done\"|\"pending\" } (Filter tasks by completion status)\n"
+             " filter_combined: { \"filters\": [ {\"type\": \"date\"|\"priority\"|\"status\", \"value\": string}, ... ] } (Apply multiple filters)\n"
              " sort_tasks: { \"by\": \"name\"|\"due\"|\"creation\" }\n"
              " list_tasks: {} (Use this if the user asks to see tasks, effectively clears search)\n"
              " exit: {} (Use this to exit the AI chat mode)\n"
@@ -70,6 +74,10 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
              "Example (Edit): User: \"change due date of task 3 to next Friday\" -> {\"action\":\"edit_task\",\"params\":{\"index\":3,\"due\":\"YYYY-MM-DD\"}}\n"
              "Example (Selected): User: \"update the due date of the selected task to tomorrow\" -> {\"action\":\"selected_task\",\"params\":{\"action\":\"edit_task\",\"params\":{\"due\":\"YYYY-MM-DD\"}}}\n"
              "Example (Search): User: \"find tasks related to 'project x'\" -> {\"action\":\"search_tasks\",\"params\":{\"term\":\"project x\"}}\n"
+             "Example (Date Filter): User: \"What tasks are due this week?\" -> {\"action\":\"filter_by_date\",\"params\":{\"range\":\"this_week\"}}\n"
+             "Example (Priority Filter): User: \"Show me all high priority tasks\" -> {\"action\":\"filter_by_priority\",\"params\":{\"level\":\"high\"}}\n"
+             "Example (Status Filter): User: \"Show me completed tasks\" -> {\"action\":\"filter_by_status\",\"params\":{\"status\":\"done\"}}\n"
+             "Example (Combined Filter): User: \"Show me low priority tasks due next week\" -> {\"action\":\"filter_combined\",\"params\":{\"filters\":[{\"type\":\"priority\",\"value\":\"low\"},{\"type\":\"date\",\"value\":\"next_week\"}]}}\n"
              "Example (Clear Search): User: \"show all tasks\" -> {\"action\":\"list_tasks\",\"params\":{}}\n"
              "\n"
              "Now, process the user's request:\n",
@@ -281,7 +289,7 @@ int ai_chat_repl(void) {
                 // Create the full line with all task details
                 snprintf(line_buf, sizeof(line_buf), "%zu: %s[%c] %s (due: %s, priority: %s%s%s)%s\n",
                          i + 1, // Display 1-based index to user/LLM
-                         (i == selected) ? "→ " : "  ", // Add arrow indicator for selected task
+                         (i == selected) ? "\u2192 " : "  ", // Add arrow indicator for selected task
                          (disp[i]->status == STATUS_DONE) ? 'x' : ' ',
                          disp[i]->name,
                          due_str,
@@ -733,6 +741,123 @@ int ai_chat_repl(void) {
                 }
             } else {
                 snprintf(last_error, MAX_ERR_LEN, "Missing 'by' parameter for sort_tasks.");
+            }
+        } else if (strcmp(action, "filter_by_date") == 0) {
+            cJSON *range_item = cJSON_GetObjectItem(params, "range");
+            if (cJSON_IsString(range_item)) {
+                const char *range_type = range_item->valuestring;
+                
+                // Set the search term to indicate the date filter
+                snprintf(search_term, sizeof(search_term), "[date:%s]", range_type);
+                
+                // Display success message
+                char msg[MAX_MSG_LEN];
+                snprintf(msg, MAX_MSG_LEN, "Filtering tasks due %s.", 
+                         strcasecmp(range_type, "overdue") == 0 ? "overdue" : 
+                         (strcasecmp(range_type, "this_week") == 0 ? "this week" : 
+                          (strcasecmp(range_type, "next_week") == 0 ? "next week" : range_type)));
+                utils_show_message(msg, LINES - 2, 2);
+                
+                // Reset selection
+                selected = 0;
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'range' parameter for filter_by_date.");
+                free(disp); // Free display list before continuing
+                continue;
+            }
+        } else if (strcmp(action, "filter_by_priority") == 0) {
+            cJSON *level_item = cJSON_GetObjectItem(params, "level");
+            if (cJSON_IsString(level_item)) {
+                const char *level_type = level_item->valuestring;
+                
+                // Set the search term to indicate the priority filter
+                snprintf(search_term, sizeof(search_term), "[priority:%s]", level_type);
+                
+                // Display success message
+                char msg[MAX_MSG_LEN];
+                snprintf(msg, MAX_MSG_LEN, "Filtering tasks by priority: %s", level_type);
+                utils_show_message(msg, LINES - 2, 2);
+                
+                // Reset selection
+                selected = 0;
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'level' parameter for filter_by_priority.");
+                free(disp); // Free display list before continuing
+                continue;
+            }
+        } else if (strcmp(action, "filter_by_status") == 0) {
+            cJSON *status_item = cJSON_GetObjectItem(params, "status");
+            if (cJSON_IsString(status_item)) {
+                const char *status_type = status_item->valuestring;
+                
+                // Set the search term to indicate the status filter
+                snprintf(search_term, sizeof(search_term), "[status:%s]", status_type);
+                
+                // Display success message
+                char msg[MAX_MSG_LEN];
+                snprintf(msg, MAX_MSG_LEN, "Filtering tasks by status: %s", status_type);
+                utils_show_message(msg, LINES - 2, 2);
+                
+                // Reset selection
+                selected = 0;
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'status' parameter for filter_by_status.");
+                free(disp); // Free display list before continuing
+                continue;
+            }
+        } else if (strcmp(action, "filter_combined") == 0) {
+            cJSON *filters_array = cJSON_GetObjectItem(params, "filters");
+            if (cJSON_IsArray(filters_array) && cJSON_GetArraySize(filters_array) > 0) {
+                // Clear the search term first
+                search_term[0] = '\0';
+                
+                // Build the combined filter
+                int filter_count = 0;
+                for (int i = 0; i < cJSON_GetArraySize(filters_array); i++) {
+                    cJSON *filter_obj = cJSON_GetArrayItem(filters_array, i);
+                    cJSON *type_item = cJSON_GetObjectItem(filter_obj, "type");
+                    cJSON *value_item = cJSON_GetObjectItem(filter_obj, "value");
+                    
+                    if (cJSON_IsString(type_item) && cJSON_IsString(value_item)) {
+                        const char *type = type_item->valuestring;
+                        const char *value = value_item->valuestring;
+                        
+                        // Add this filter to the search term
+                        char filter_part[64];
+                        
+                        if (strcmp(type, "date") == 0) {
+                            snprintf(filter_part, sizeof(filter_part), "[date:%s]", value);
+                        } else if (strcmp(type, "priority") == 0) {
+                            snprintf(filter_part, sizeof(filter_part), "[priority:%s]", value);
+                        } else if (strcmp(type, "status") == 0) {
+                            snprintf(filter_part, sizeof(filter_part), "[status:%s]", value);
+                        } else {
+                            continue; // Skip unknown filter type
+                        }
+                        
+                        // Append to search term if there's room
+                        if (strlen(search_term) + strlen(filter_part) < sizeof(search_term) - 1) {
+                            strcat(search_term, filter_part);
+                            filter_count++;
+                        }
+                    }
+                }
+                
+                if (filter_count > 0) {
+                    // Display success message
+                    char msg[MAX_MSG_LEN];
+                    snprintf(msg, MAX_MSG_LEN, "Applied %d combined filters.", filter_count);
+                    utils_show_message(msg, LINES - 2, 2);
+                } else {
+                    snprintf(last_error, MAX_ERR_LEN, "No valid filters found in the combined filter.");
+                }
+                
+                // Reset selection
+                selected = 0;
+            } else {
+                snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'filters' array for filter_combined.");
+                free(disp); // Free display list before continuing
+                continue;
             }
         } else if (strcmp(action, "search_tasks") == 0) {
             cJSON *term_item = cJSON_GetObjectItem(params, "term");
