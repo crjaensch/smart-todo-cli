@@ -98,7 +98,8 @@ In AI chat mode, you can use natural language commands like:
 git clone https://github.com/yourusername/smart-todo-cli.git
 cd smart-todo-cli
 
-# Build the application
+# Navigate to the src directory and build
+cd src
 make
 
 # Set your OpenAI API key (required for AI features)
