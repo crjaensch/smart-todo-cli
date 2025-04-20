@@ -50,13 +50,17 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
              "- For actions targeting a specific task (mark, delete, edit), use the 'index' parameter, referring to the 1-based index shown in the 'Current Tasks' list.\n"
              "- IMPORTANT: Only use task indices that are explicitly shown in the current task list. Do not reference tasks by absolute indices that may have changed.\n"
              "- To reference the currently selected task (marked with an arrow \u2192 and 'SELECTED' in the list), use the 'selected_task' action.\n"
+             "- For project management, you can create or delete projects by name, and assign tasks to a specific project.\n"
+             "- Projects can only be deleted if they have no tasks.\n"
              "\n"
              "Supported Actions & Params:\n"
-             " add_task: { \"name\": string, \"due\": \"YYYY-MM-DD\" | null, \"tags\": [string], \"priority\": \"low\"|\"medium\"|\"high\" }\n"
+             " add_task: { \"name\": string, \"due\": \"YYYY-MM-DD\" | null, \"tags\": [string], \"priority\": \"low\"|\"medium\"|\"high\", \"project\": string }\n"
              " mark_done: { \"index\": number }\n"
              " delete_task: { \"index\": number }\n"
              " edit_task: { \"index\": number, \"name\": string?, \"due\": \"YYYY-MM-DD\" | null?, \"tags\": [string]?, \"priority\": string?, \"status\": string? }\n"
              " selected_task: { \"action\": \"mark_done\" | \"delete_task\" | \"edit_task\", \"params\": {...} } (Apply an action to the currently selected task)\n"
+             " add_project: { \"name\": string }\n"
+             " delete_project: { \"name\": string } (Only allowed if the project has no tasks)\n"
              " search_tasks: { \"term\": string | null } (null term clears search)\n"
              " filter_by_date: { \"range\": \"today\"|\"tomorrow\"|\"this_week\"|\"next_week\"|\"overdue\" } (Filter tasks by date range)\n"
              " filter_by_priority: { \"level\": \"high\"|\"medium\"|\"low\" } (Filter tasks by priority)\n"
@@ -70,6 +74,9 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
              "%s" // Task list context added here
              "\n"
              "Example (Add): User: \"add buy milk tomorrow high prio\" -> {\"action\":\"add_task\",\"params\":{\"name\":\"buy milk\",\"due\":\"YYYY-MM-DD\",\"tags\":[],\"priority\":\"high\"}}\n"
+             "Example (Add Project): User: \"create new project Health\" -> {\"action\":\"add_project\",\"params\":{\"name\":\"Health\"}}\n"
+             "Example (Delete Project): User: \"delete project Health\" -> {\"action\":\"delete_project\",\"params\":{\"name\":\"Health\"}}\n"
+             "Example (Task in Project): User: \"create a new task Do workout at Gym in project Health\" -> {\"action\":\"add_task\",\"params\":{\"name\":\"Do workout at Gym\",\"project\":\"Health\"}}\n"
              "Example (Mark): User: \"mark item 2 done\" -> {\"action\":\"mark_done\",\"params\":{\"index\":2}}\n"
              "Example (Edit): User: \"change due date of task 3 to next Friday\" -> {\"action\":\"edit_task\",\"params\":{\"index\":3,\"due\":\"YYYY-MM-DD\"}}\n"
              "Example (Selected): User: \"update the due date of the selected task to tomorrow\" -> {\"action\":\"selected_task\",\"params\":{\"action\":\"edit_task\",\"params\":{\"due\":\"YYYY-MM-DD\"}}}\n"
@@ -107,7 +114,7 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
     snprintf(ptr, remaining_size,
             "---\n" \
             "Respond ONLY with a JSON object containing 'action' and parameters. " \
-            "Valid actions: 'add_task' (name, due_date_iso?, tags?, priority?), 'mark_done' (index), 'delete_task' (index), 'edit_task' (index, name?, due_date_iso?, tags?, priority?), 'selected_task' (action, params), 'search_tasks' (term), 'sort_tasks' (field: name|due|prio), 'list_tasks' (no params), 'exit' (no params). " \
+            "Valid actions: 'add_task' (name, due_date_iso?, tags?, priority?, project?), 'mark_done' (index), 'delete_task' (index), 'edit_task' (index, name?, due_date_iso?, tags?, priority?), 'selected_task' (action, params), 'search_tasks' (term), 'sort_tasks' (field: name|due|prio), 'list_tasks' (no params), 'exit' (no params). " \
             "For dates, use ISO format YYYY-MM-DD.");
 
 end_prompt:
@@ -236,10 +243,18 @@ int ai_chat_repl(void) {
         // Optional: Inform user if storage was newly created or empty
     }
 
+    // Load projects
+    task_manager_load_projects();
+    char **projects = NULL;
+    size_t project_count = task_manager_get_projects(&projects);
+    size_t selected_project_idx = 0;
+    const char *current_project = projects[selected_project_idx];
+
     // Initialize UI
     if (ui_init() != 0) {
         fprintf(stderr, "Failed to initialize UI.\n");
         task_manager_cleanup(tasks, count);
+        free(projects);
         return 1;
     }
 
@@ -247,97 +262,143 @@ int ai_chat_repl(void) {
     char search_term[64] = ""; // For potential future search integration
     char last_error[MAX_ERR_LEN] = ""; // To display errors
 
+    Task **disp = malloc((count + 1) * sizeof(Task*));
+    if (!disp) {
+        ui_teardown();
+        task_manager_cleanup(tasks, count);
+        free(projects);
+        fprintf(stderr, "Failed to allocate memory for display list.\n");
+        return 1;
+    }
+
     while (1) {
-        // Build display list (currently includes all tasks)
-        // In the future, this could be filtered based on LLM 'search' action
-        Task **disp = malloc((count + 1) * sizeof(Task*));
-        if (!disp) {
-            // Handle allocation failure
-            ui_teardown();
-            task_manager_cleanup(tasks, count);
-            fprintf(stderr, "Failed to allocate memory for display list.\n");
-            return 1;
+        // --- Project sidebar logic ---
+        // Use central project list
+        if (projects) {
+            free(projects);
+            projects = NULL;
         }
-        
+        project_count = task_manager_get_projects(&projects);
+        if (selected_project_idx >= project_count && project_count > 0) selected_project_idx = project_count - 1;
+        current_project = projects[selected_project_idx];
+
+        // Build display list for current project
         size_t disp_count = 0;
         for (size_t i = 0; i < count; ++i) {
-             if (search_term[0] == '\0' || task_matches_search(tasks[i], search_term)) {
-                 disp[disp_count++] = tasks[i];
-             }
+            if ((search_term[0] == '\0' || task_matches_search(tasks[i], search_term)) &&
+                strcmp(tasks[i]->project, current_project) == 0) {
+                disp[disp_count++] = tasks[i];
+            }
         }
-        disp[disp_count] = NULL; // Null terminate the display list
+        disp[disp_count] = NULL;
         if (selected >= disp_count && disp_count > 0) selected = disp_count - 1;
         if (disp_count == 0) selected = 0;
 
         // Draw UI
         clear();
         ui_draw_header(search_term[0] ? search_term : "AI Chat Mode");
-        ui_draw_tasks(disp, disp_count, selected); // Pass 0 for selected initially
-        
-        // Add a suggestion for the selected task if applicable
+        ui_draw_projects(projects, project_count, selected_project_idx);
+        ui_draw_tasks(disp, disp_count, selected);
+
+        // Add blank line after task list before suggestion
+        if (disp_count > 0) {
+            int blank_y = 2 + (int)disp_count;
+            move(blank_y, PROJECT_COL_WIDTH + 1);
+            clrtoeol();
+            mvaddch(blank_y, PROJECT_COL_WIDTH, ACS_VLINE);
+        }
+
+        // Suggestion under task list
+        int suggestion_y = 3 + (int)disp_count;
         if (disp_count > 0 && selected < disp_count) {
             Task *selected_task = disp[selected];
-            
-            // Only generate AI suggestions for high priority tasks or overdue tasks
             if (selected_task->priority == PRIORITY_HIGH || 
                 (selected_task->due > 0 && selected_task->due < time(NULL))) {
-                
-                // Generate AI-powered suggestion
                 char *ai_suggestion = generate_ai_suggestion(selected_task);
-                
                 if (ai_suggestion && ai_suggestion[0]) {
-                    // Display the AI-generated suggestion
-                    ui_draw_suggestion(LINES - 3, ai_suggestion);
-                    free(ai_suggestion); // Free the suggestion memory
+                    ui_draw_suggestion(suggestion_y, ai_suggestion);
+                    free(ai_suggestion);
                 }
             }
         }
-        
-        // Draw footer with help text
+
         ui_draw_ai_chat_footer();
-        
-        // Display last error if any
         if (last_error[0] != '\0') {
              int err_y = LINES - 2;
              attron(A_BOLD | COLOR_PAIR(CP_OVERDUE));
              mvprintw(err_y, 1, "Error: %s", last_error);
              attroff(A_BOLD | COLOR_PAIR(CP_OVERDUE));
-             last_error[0] = '\0'; // Clear after displaying once
+             last_error[0] = '\0';
         }
         refresh();
 
         // Get user input - handle navigation keys first
         int ch = ui_get_input();
         if (ch == 'q') {
-            free(disp); // Free display list before breaking
-            break; // Exit loop
+            free(disp); 
+            break;
         }
         
         // Handle navigation keys
         switch (ch) {
+            case KEY_LEFT:
+            case 'h':
+                if (selected_project_idx > 0) selected_project_idx--;
+                current_project = projects[selected_project_idx];
+                selected = 0; // Reset task selection when changing projects
+                continue;
+            case KEY_RIGHT:
+            case 'l':
+                if (selected_project_idx + 1 < project_count) selected_project_idx++;
+                current_project = projects[selected_project_idx];
+                selected = 0; // Reset task selection when changing projects
+                continue;
+            case '+': { // Add new project
+                char proj_name[64];
+                prompt_input("New project name:", proj_name, sizeof(proj_name));
+                if (proj_name[0] != '\0') {
+                    if (task_manager_add_project(proj_name) == 0) {
+                        task_manager_save_projects();
+                        free(projects);
+                        project_count = task_manager_get_projects(&projects);
+                        selected_project_idx = project_count - 1;
+                        current_project = projects[selected_project_idx];
+                    } else {
+                        utils_show_message("Failed to add project", LINES-2, 2);
+                    }
+                }
+                continue;
+            }
+            case '-': { // Delete project
+                if (project_count <= 1) { continue; }
+                const char *to_delete = projects[selected_project_idx];
+                if (strcmp(to_delete, "default") == 0) { continue; }
+                int del_result = task_manager_delete_project(to_delete, tasks, count);
+                if (del_result == 0) {
+                    task_manager_save_projects();
+                    free(projects);
+                    project_count = task_manager_get_projects(&projects);
+                    if (selected_project_idx >= project_count) selected_project_idx = project_count - 1;
+                    current_project = projects[selected_project_idx];
+                } else {
+                    utils_show_message("Only projects without tasks can be deleted", LINES-2, 2);
+                }
+                continue;
+            }
             case KEY_DOWN:
             case 'j':
                 if (selected + 1 < disp_count) selected++;
-                free(disp); // Free display list before continuing
-                continue; // Redraw UI with new selection
-                
+                continue;
             case KEY_UP:
             case 'k':
                 if (selected > 0) selected--;
-                free(disp); // Free display list before continuing
-                continue; // Redraw UI with new selection
-                
+                continue;
             case 'm': {
-                // Mark task as done/undone (toggle status)
-                if (disp_count == 0) {
-                    free(disp);
-                    continue; // Nothing to mark, just redraw
-                }
+                if (disp_count == 0) { continue; }
                 Task *t = disp[selected];
                 t->status = (t->status == STATUS_DONE) ? STATUS_PENDING : STATUS_DONE;
-                utils_show_message(t->status == STATUS_DONE ? "Task marked as done." : "Task marked as pending.", LINES - 2, 2);
-                free(disp); // Free display list before continuing
-                continue; // Redraw UI with updated status
+                utils_show_message(t->status == STATUS_DONE ? "Task marked as done." : "Task marked as pending.", LINES-2, 2);
+                continue;
             }
                 
             case 10: // Enter key
@@ -345,8 +406,6 @@ int ai_chat_repl(void) {
                 break;
                 
             default:
-                // Ignore other keys, redraw
-                free(disp); // Free display list before continuing
                 continue;
         }
         
@@ -355,8 +414,8 @@ int ai_chat_repl(void) {
         prompt_input("Enter command:", user_input, sizeof(user_input));
 
         if (strcmp(user_input, "exit") == 0 || strlen(user_input) == 0) {
-            free(disp); // Free display list before breaking
-            break; // Exit loop
+            free(disp); 
+            break;
         }
 
         // ---- LLM Call, Parsing, and Action Execution ----
@@ -435,7 +494,6 @@ int ai_chat_repl(void) {
         if (llm_status != 0 || !llm_response_json || llm_response_json[0] == '\0') {
             snprintf(last_error, MAX_ERR_LEN, "AI interaction failed (status: %d)", llm_status);
             if (llm_response_json) free(llm_response_json);
-            free(disp); // Free display list before continuing
             continue; // Go back to draw the error
         }
 
@@ -444,7 +502,6 @@ int ai_chat_repl(void) {
         if (!api_response) {
             snprintf(last_error, MAX_ERR_LEN, "Failed to parse API response JSON");
             free(llm_response_json);
-            free(disp);
             continue;
         }
         
@@ -470,7 +527,6 @@ int ai_chat_repl(void) {
         
         if (!content) {
             snprintf(last_error, MAX_ERR_LEN, "Could not extract content from API response");
-            free(disp); // Free display list before continuing
             continue;
         }
         
@@ -480,7 +536,6 @@ int ai_chat_repl(void) {
 
         if (!root) {
             snprintf(last_error, MAX_ERR_LEN, "AI response was not valid JSON");
-            free(disp); // Free display list before continuing
             continue;
         }
 
@@ -488,9 +543,8 @@ int ai_chat_repl(void) {
         cJSON *params_item = cJSON_GetObjectItemCaseSensitive(root, "params");
 
         if (!cJSON_IsString(action_item) || !cJSON_IsObject(params_item)) {
-            snprintf(last_error, MAX_ERR_LEN, "AI response JSON missing 'action' string or 'params' object.");
+            utils_show_message("Request not understood. No action taken.", LINES-2, 2);
             cJSON_Delete(root);
-            free(disp); // Free display list before continuing
             continue;
         }
 
@@ -506,6 +560,7 @@ int ai_chat_repl(void) {
             cJSON *due = cJSON_GetObjectItem(params, "due"); // Can be string or null
             cJSON *tags = cJSON_GetObjectItem(params, "tags"); // Array
             cJSON *priority = cJSON_GetObjectItem(params, "priority"); // string
+            cJSON *project = cJSON_GetObjectItem(params, "project"); // optional string
 
             // More lenient validation - only require name to be a valid string
             if (cJSON_IsString(name) && name->valuestring[0] != '\0') {
@@ -540,17 +595,21 @@ int ai_chat_repl(void) {
                     }
                 }
 
+                // Parse project name
+                const char *proj_name = current_project;
+                if (project && cJSON_IsString(project) && project->valuestring[0] != '\0') {
+                    proj_name = project->valuestring;
+                }
+
                 // Add task using task manager
-                if (task_manager_add_task(&tasks, &count, name->valuestring, due_time, tag_ptrs, tag_count, prio) == 0) {
+                if (task_manager_add_task(&tasks, &count, name->valuestring, due_time, tag_ptrs, tag_count, prio, proj_name) == 0) {
                     utils_show_message("Task added.", LINES - 2, 2);
                 } else {
                     snprintf(last_error, MAX_ERR_LEN, "Failed to add task.");
-                    free(disp); // Free display list before continuing
                     continue;
                 }
             } else {
                  snprintf(last_error, MAX_ERR_LEN, "Invalid params for add_task.");
-                 free(disp); // Free display list before continuing
                  continue;
             }
         } else if (strcmp(action, "delete_task") == 0) {
@@ -670,12 +729,10 @@ int ai_chat_repl(void) {
                      char index_error[MAX_ERR_LEN];
                      snprintf(index_error, MAX_ERR_LEN, "Invalid index %d. Valid range: 1-%zu.", index_1based, disp_count);
                      snprintf(last_error, MAX_ERR_LEN, "%s", index_error);
-                     free(disp); // Free display list before continuing
                      continue;
                  }
              } else {
                  snprintf(last_error, MAX_ERR_LEN, "Missing/invalid 'index' param for mark_done.");
-                 free(disp); // Free display list before continuing
                  continue;
              }
         } else if (strcmp(action, "edit_task_status") == 0) {
@@ -695,7 +752,6 @@ int ai_chat_repl(void) {
                              new_status = STATUS_PENDING;
                          } else {
                              snprintf(last_error, MAX_ERR_LEN, "Invalid status value in edit_task_status.");
-                             free(disp); // Free display list before continuing
                              continue;
                          }
                          
@@ -707,7 +763,6 @@ int ai_chat_repl(void) {
                          }
                      } else {
                          snprintf(last_error, MAX_ERR_LEN, "Missing 'status' param for edit_task_status.");
-                         free(disp); // Free display list before continuing
                          continue;
                      }
                  } else {
@@ -715,25 +770,21 @@ int ai_chat_repl(void) {
                      char index_error[MAX_ERR_LEN];
                      snprintf(index_error, MAX_ERR_LEN, "Invalid index %d. Valid range: 1-%zu.", index_1based, disp_count);
                      snprintf(last_error, MAX_ERR_LEN, "%s", index_error);
-                     free(disp); // Free display list before continuing
                      continue;
                  }
              } else {
                  snprintf(last_error, MAX_ERR_LEN, "Missing/invalid 'index' param for edit_task_status.");
-                 free(disp); // Free display list before continuing
                  continue;
              }
         } else if (strcmp(action, "selected_task") == 0) {
              // Handle actions on the currently selected task
              if (disp_count == 0) {
                  snprintf(last_error, MAX_ERR_LEN, "No tasks available to select.");
-                 free(disp);
                  continue;
              }
              
              if (selected >= disp_count) {
                  snprintf(last_error, MAX_ERR_LEN, "Invalid selection index.");
-                 free(disp); // Free display list before continuing
                  continue;
              }
              
@@ -743,7 +794,6 @@ int ai_chat_repl(void) {
 
              if (!cJSON_IsString(nested_action_item) || !cJSON_IsObject(nested_params_item)) {
                  snprintf(last_error, MAX_ERR_LEN, "selected_task requires 'action' and 'params' fields.");
-                 free(disp); // Free display list before continuing
                  continue;
              }
              
@@ -881,7 +931,6 @@ int ai_chat_repl(void) {
                 selected = 0;
             } else {
                 snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'range' parameter for filter_by_date.");
-                free(disp); // Free display list before continuing
                 continue;
             }
         } else if (strcmp(action, "filter_by_priority") == 0) {
@@ -901,7 +950,6 @@ int ai_chat_repl(void) {
                 selected = 0;
             } else {
                 snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'level' parameter for filter_by_priority.");
-                free(disp); // Free display list before continuing
                 continue;
             }
         } else if (strcmp(action, "filter_by_status") == 0) {
@@ -921,7 +969,6 @@ int ai_chat_repl(void) {
                 selected = 0;
             } else {
                 snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'status' parameter for filter_by_status.");
-                free(disp); // Free display list before continuing
                 continue;
             }
         } else if (strcmp(action, "filter_combined") == 0) {
@@ -975,7 +1022,6 @@ int ai_chat_repl(void) {
                 selected = 0;
             } else {
                 snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'filters' array for filter_combined.");
-                free(disp); // Free display list before continuing
                 continue;
             }
         } else if (strcmp(action, "search_tasks") == 0) {
@@ -989,7 +1035,6 @@ int ai_chat_repl(void) {
                  utils_show_message("Search cleared.", LINES - 2, 2);
             } else {
                  snprintf(last_error, MAX_ERR_LEN, "Invalid 'term' param for search_tasks.");
-                 free(disp); // Free display list before continuing
                  continue;
             }
             selected = 0; // Reset selection on search change
@@ -997,6 +1042,39 @@ int ai_chat_repl(void) {
             search_term[0] = '\0'; // Clear search term
             selected = 0;
             utils_show_message("Displaying all tasks.", LINES - 2, 2);
+        } else if (strcmp(action, "add_project") == 0) {
+            cJSON *name_item = cJSON_GetObjectItemCaseSensitive(params, "name");
+            if (cJSON_IsString(name_item) && name_item->valuestring[0] != '\0') {
+                if (task_manager_add_project(name_item->valuestring) == 0) {
+                    task_manager_save_projects();
+                    free(projects);
+                    project_count = task_manager_get_projects(&projects);
+                    selected_project_idx = project_count - 1;
+                    current_project = projects[selected_project_idx];
+                    utils_show_message("Project created", LINES-2, 2);
+                } else {
+                    utils_show_message("Failed to create project", LINES-2, 2);
+                }
+            } else {
+                utils_show_message("Project name missing or invalid", LINES-2, 2);
+            }
+        } else if (strcmp(action, "delete_project") == 0) {
+            cJSON *name_item = cJSON_GetObjectItemCaseSensitive(params, "name");
+            if (cJSON_IsString(name_item) && name_item->valuestring[0] != '\0') {
+                int del_result = task_manager_delete_project(name_item->valuestring, tasks, count);
+                if (del_result == 0) {
+                    task_manager_save_projects();
+                    free(projects);
+                    project_count = task_manager_get_projects(&projects);
+                    if (selected_project_idx >= project_count) selected_project_idx = project_count - 1;
+                    current_project = projects[selected_project_idx];
+                    utils_show_message("Project deleted", LINES-2, 2);
+                } else {
+                    utils_show_message("Only projects without tasks can be deleted", LINES-2, 2);
+                }
+            } else {
+                utils_show_message("Project name missing or invalid", LINES-2, 2);
+            }
         } else if (strcmp(action, "exit") == 0) {
             // Handle explicit exit action from the LLM
             utils_show_message("Exiting AI chat mode...", LINES - 2, 1);
@@ -1007,12 +1085,10 @@ int ai_chat_repl(void) {
         else {
             snprintf(last_error, MAX_ERR_LEN, "Unknown action '%s' received from AI.", action);
             cJSON_Delete(root);
-            free(disp); // Free display list before continuing
             continue;
         }
 
         cJSON_Delete(root); // Clean up JSON object
-        free(disp); // Free display list at the end of each iteration
     }
 
     // Cleanup
@@ -1023,7 +1099,9 @@ int ai_chat_repl(void) {
         // Don't print to stderr as ncurses is torn down. Maybe log?
     }
 
+    task_manager_save_projects();
     task_manager_cleanup(tasks, count);
+    free(projects);
 
     printf("Exiting AI chat mode.\n"); // Print after ncurses is done
     return 0;

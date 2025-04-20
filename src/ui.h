@@ -11,6 +11,7 @@
 #define CP_OVERDUE    2
 #define CP_APPROACH   3
 #define CP_FUTURE     4
+#define CP_SELECTED_PROJECT 5  // selected-project highlight: black text on cyan background
 
 // Initialize the TUI; returns 0 on success
 int ui_init(void);
@@ -43,5 +44,10 @@ int ui_get_input(void);
 
 // Map due time to a curses color pair
 int ui_color_for_due(time_t due);
+
+// Draw list of projects sidebar
+void ui_draw_projects(char **projects, size_t count, size_t selected);
+
+extern int PROJECT_COL_WIDTH;
 
 #endif // TODO_APP_UI_H

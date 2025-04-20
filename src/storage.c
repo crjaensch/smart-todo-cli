@@ -12,6 +12,7 @@
 
 #define STORAGE_DIR ".todo-app"
 #define TASKS_FILE  "tasks.json"
+#define PROJECTS_FILE  "projects.json"
 
 // Build full path for a given filename under $HOME/.todo-app
 static char *build_path(const char *filename) {
@@ -161,6 +162,57 @@ int storage_save_tasks(Task **tasks, size_t count) {
     free(out);
     free(path);
     return 0;
+}
+
+// Save array of project names to projects.json
+int storage_save_projects(char **projects, size_t count) {
+    char *path = build_path(PROJECTS_FILE);
+    if (!path) return -1;
+    cJSON *root = cJSON_CreateArray();
+    for (size_t i = 0; i < count; ++i) {
+        cJSON_AddItemToArray(root, cJSON_CreateString(projects[i]));
+    }
+    char *json = cJSON_PrintUnformatted(root);
+    FILE *f = fopen(path, "w");
+    free(path);
+    if (!f) { cJSON_Delete(root); free(json); return -1; }
+    fputs(json, f);
+    fclose(f);
+    cJSON_Delete(root);
+    free(json);
+    return 0;
+}
+
+// Load array of project names from projects.json
+size_t storage_load_projects(char ***projects_out) {
+    *projects_out = NULL;
+    char *path = build_path(PROJECTS_FILE);
+    if (!path) return 0;
+    FILE *f = fopen(path, "r");
+    free(path);
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = utils_malloc(len+1);
+    fread(buf, 1, len, f);
+    buf[len] = 0;
+    fclose(f);
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) return 0;
+    size_t n = cJSON_GetArraySize(root);
+    char **arr = utils_malloc(n * sizeof(char*));
+    size_t actual = 0;
+    for (size_t i = 0; i < n; ++i) {
+        cJSON *item = cJSON_GetArrayItem(root, i);
+        if (cJSON_IsString(item)) {
+            arr[actual++] = utils_strdup(item->valuestring);
+        }
+    }
+    cJSON_Delete(root);
+    *projects_out = arr;
+    return actual;
 }
 
 // Free array of tasks

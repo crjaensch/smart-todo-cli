@@ -88,6 +88,17 @@ Task *task_create(const char *name, time_t due, const char *tags[], size_t tag_c
         t->tags = NULL;
     }
 
+    // Set default project
+    t->project = utils_strdup("default");
+    if (!t->project) {
+        for (size_t j = 0; j < t->tag_count; ++j) free(t->tags[j]);
+        free(t->tags);
+        free(t->name);
+        free(t->id);
+        free(t);
+        return NULL;
+    }
+
     return t;
 }
 
@@ -99,6 +110,7 @@ void task_free(Task *t) {
         free(t->tags[i]);
     }
     free(t->tags);
+    free(t->project);
     free(t);
 }
 
@@ -146,6 +158,7 @@ char *task_to_json(const Task *t) {
 
     cJSON_AddStringToObject(obj, "priority", priority_to_str(t->priority));
     cJSON_AddStringToObject(obj, "status", status_to_str(t->status));
+    cJSON_AddStringToObject(obj, "project", t->project ? t->project : "default");
 
     char *json_str = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
@@ -163,6 +176,7 @@ Task *task_from_json(const char *json_str) {
     cJSON *tags = cJSON_GetObjectItem(obj, "tags");
     cJSON *priority = cJSON_GetObjectItem(obj, "priority");
     cJSON *status = cJSON_GetObjectItem(obj, "status");
+    cJSON *project = cJSON_GetObjectItem(obj, "project");
 
     if (!cJSON_IsString(id) || !cJSON_IsString(name) || !cJSON_IsString(created)
         || !cJSON_IsArray(tags) || !cJSON_IsString(priority) || !cJSON_IsString(status)) {
@@ -250,6 +264,21 @@ Task *task_from_json(const char *json_str) {
 
     t->priority = str_to_priority(priority->valuestring);
     t->status = str_to_status(status->valuestring);
+
+    if (cJSON_IsString(project)) {
+        t->project = utils_strdup(project->valuestring);
+    } else {
+        t->project = utils_strdup("default");
+    }
+    if (!t->project) {
+        // cleanup memory
+        free(t->name); free(t->id);
+        for (size_t i = 0; i < t->tag_count; ++i) free(t->tags[i]);
+        free(t->tags);
+        free(t);
+        cJSON_Delete(obj);
+        return NULL;
+    }
 
     cJSON_Delete(obj);
     return t;

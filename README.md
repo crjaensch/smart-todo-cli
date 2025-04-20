@@ -12,6 +12,7 @@ The standard mode provides an interactive terminal interface for managing your t
 - Set due dates, priorities, and tags
 - Sort tasks by name, creation date, or due date
 - Filter tasks by status, tags, or search terms
+- Organize tasks into named projects via the sidebar (use '+' and '-' keys to add/delete projects)
 - View detailed task information
 
 ### AI-Assisted Modes

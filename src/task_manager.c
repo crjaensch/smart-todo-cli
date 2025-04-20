@@ -10,6 +10,10 @@
 #include <string.h>
 #include <time.h>
 
+#define MAX_PROJECTS 64
+static char *project_list[MAX_PROJECTS];
+static size_t project_count = 0;
+
 int task_manager_init(void) {
     return storage_init();
 }
@@ -24,7 +28,7 @@ int task_manager_save_tasks(Task **tasks, size_t count) {
 
 int task_manager_add_task(Task ***tasks, size_t *count, const char *name, 
                           time_t due, const char **tags, size_t tag_count, 
-                          Priority priority) {
+                          Priority priority, const char *project) {
     if (!tasks || !*tasks || !count || !name) {
         return -1;
     }
@@ -33,6 +37,11 @@ int task_manager_add_task(Task ***tasks, size_t *count, const char *name,
     Task *new_task = task_create(name, due, tags, tag_count, priority);
     if (!new_task) {
         return -1;
+    }
+    
+    if (new_task && project) {
+        free(new_task->project);
+        new_task->project = utils_strdup(project);
     }
     
     // Allocate new array with space for the new task and NULL terminator
@@ -204,6 +213,19 @@ size_t task_manager_filter_by_search(Task **tasks, size_t count,
     return filtered_count;
 }
 
+size_t task_manager_filter_by_project(Task **tasks, size_t count,
+                                      const char *project,
+                                      Task **filtered_tasks) {
+    if (!tasks || !filtered_tasks || !project) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (strcmp(tasks[i]->project, project) == 0) {
+            filtered_tasks[n++] = tasks[i];
+        }
+    }
+    return n;
+}
+
 size_t task_manager_filter_by_date_range(Task **tasks, size_t count, 
                                         time_t start_date, time_t end_date,
                                         Task **filtered_tasks) {
@@ -324,6 +346,63 @@ size_t task_manager_filter_by_date_preset(Task **tasks, size_t count,
     
     // Use the date range filter with our calculated dates
     return task_manager_filter_by_date_range(tasks, count, start_date, end_date, filtered_tasks);
+}
+
+int task_manager_add_project(const char *name) {
+    if (!name || strlen(name) == 0) return -1;
+    for (size_t i = 0; i < project_count; ++i) {
+        if (strcmp(project_list[i], name) == 0) return 0; // already exists
+    }
+    if (project_count >= MAX_PROJECTS) return -1;
+    project_list[project_count++] = utils_strdup(name);
+    return 0;
+}
+
+int task_manager_delete_project(const char *name, Task **tasks, size_t task_count) {
+    if (!name || strlen(name) == 0) return -1;
+    // Check if any task uses this project
+    for (size_t i = 0; i < task_count; ++i) {
+        if (tasks[i] && tasks[i]->project && strcmp(tasks[i]->project, name) == 0) {
+            return -1; // In use
+        }
+    }
+    // Find and remove from project_list
+    for (size_t i = 0; i < project_count; ++i) {
+        if (strcmp(project_list[i], name) == 0) {
+            free(project_list[i]);
+            for (size_t j = i + 1; j < project_count; ++j) {
+                project_list[j-1] = project_list[j];
+            }
+            project_count--;
+            return 0;
+        }
+    }
+    return -1; // Not found
+}
+
+size_t task_manager_get_projects(char ***projects_out) {
+    if (!projects_out) return 0;
+    *projects_out = utils_malloc(project_count * sizeof(char*));
+    for (size_t i = 0; i < project_count; ++i) {
+        (*projects_out)[i] = project_list[i];
+    }
+    return project_count;
+}
+
+int task_manager_save_projects(void) {
+    return storage_save_projects(project_list, project_count);
+}
+
+int task_manager_load_projects(void) {
+    for (size_t i = 0; i < project_count; ++i) free(project_list[i]);
+    project_count = 0;
+    char **loaded = NULL;
+    size_t n = storage_load_projects(&loaded);
+    for (size_t i = 0; i < n && i < MAX_PROJECTS; ++i) {
+        project_list[project_count++] = loaded[i];
+    }
+    free(loaded);
+    return 0;
 }
 
 void task_manager_cleanup(Task **tasks, size_t count) {

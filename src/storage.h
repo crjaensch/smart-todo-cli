@@ -33,4 +33,19 @@ int storage_save_tasks(Task **tasks, size_t count);
  */
 void storage_free_tasks(Task **tasks, size_t count);
 
+/**
+ * Save an array of projects to ~/.todo-app/projects.json.
+ * @param projects array of project name strings
+ * @param count number of projects
+ * @return 0 on success, -1 on error.
+ */
+int storage_save_projects(char **projects, size_t count);
+
+/**
+ * Load projects from ~/.todo-app/projects.json.
+ * @param projects_out[out] pointer to array of project name strings (allocated, must be freed by caller)
+ * @return number of projects loaded
+ */
+size_t storage_load_projects(char ***projects_out);
+
 #endif // TODO_APP_STORAGE_H

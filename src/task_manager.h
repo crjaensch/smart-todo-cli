@@ -39,11 +39,12 @@ int task_manager_save_tasks(Task **tasks, size_t count);
  * @param tags Array of tag strings
  * @param tag_count Number of tags
  * @param priority Task priority
+ * @param project Task project
  * @return 0 on success, -1 on failure
  */
 int task_manager_add_task(Task ***tasks, size_t *count, const char *name, 
                           time_t due, const char **tags, size_t tag_count, 
-                          Priority priority);
+                          Priority priority, const char *project);
 
 /**
  * Delete a task from the task array
@@ -103,6 +104,18 @@ size_t task_manager_filter_by_search(Task **tasks, size_t count,
                                     Task **filtered_tasks);
 
 /**
+ * Filter tasks by project name, returns number filtered
+ * @param tasks Source task array
+ * @param count Number of tasks in source array
+ * @param project Project name to filter by
+ * @param filtered_tasks Output array for filtered tasks (must be pre-allocated)
+ * @return Number of tasks in filtered array
+ */
+size_t task_manager_filter_by_project(Task **tasks, size_t count,
+                                      const char *project,
+                                      Task **filtered_tasks);
+
+/**
  * Filter tasks by date range
  * @param tasks Source task array
  * @param count Number of tasks in source array
@@ -133,5 +146,36 @@ size_t task_manager_filter_by_date_preset(Task **tasks, size_t count,
  * @param count Number of tasks
  */
 void task_manager_cleanup(Task **tasks, size_t count);
+
+/**
+ * Add a new project to the project list
+ * @param name Project name
+ * @return 0 on success, -1 on failure
+ */
+int task_manager_add_project(const char *name);
+
+/**
+ * Get the list of projects
+ * @param projects_out Pointer to array of project names (allocated by function)
+ * @return Number of projects
+ */
+size_t task_manager_get_projects(char ***projects_out);
+
+/**
+ * Save projects to storage
+ * @return 0 on success, -1 on failure
+ */
+int task_manager_save_projects(void);
+
+/**
+ * Load projects from storage
+ * @return 0 on success, -1 on failure
+ */
+int task_manager_load_projects(void);
+
+/**
+ * Delete a project by name. Returns 0 on success, -1 if not found or in use.
+ */
+int task_manager_delete_project(const char *name, Task **tasks, size_t task_count);
 
 #endif /* TASK_MANAGER_H */

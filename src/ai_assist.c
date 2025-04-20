@@ -7,6 +7,7 @@
 #include "storage.h"
 #include <time.h>
 #include "llm_api.h"
+#include "utils.h"
 
 void ai_smart_add(const char *prompt, int debug) {
     // Get current date in ISO 8601 (UTC, no time)
@@ -34,6 +35,7 @@ void ai_smart_add(const char *prompt, int debug) {
         "  - due (string): ISO 8601 UTC timestamp if a due date exists, else an empty string\n"
         "  - tags (array of strings): any labels mentioned\n"
         "  - priority (string): one of \"low\", \"medium\", or \"high\"\n"
+        "  - project (string): project name, default \"default\" if omitted\n"
         "  - status (string): either \"pending\" or \"done\"\n"
         "- Parsing rules:\n"
         "  - Interpret \"today\", \"tomorrow\", or \"next week\" as due dates, using the provided current date.\n"
@@ -53,6 +55,7 @@ void ai_smart_add(const char *prompt, int debug) {
         "  \"due\": \"2025-04-23T00:00:00Z\",\n"
         "  \"tags\": [\"AI\", \"Learning\"],\n"
         "  \"priority\": \"high\",\n"
+        "  \"project\": \"default\",\n"
         "  \"status\": \"pending\"\n"
         "}\n",
         today_str);
@@ -100,6 +103,10 @@ void ai_smart_add(const char *prompt, int debug) {
         cJSON_Delete(resp);
         free(llm_raw);
         exit(1);
+    }
+    if (t && (!t->project || t->project[0]=='\0')) {
+        if (t->project) free(t->project);
+        t->project = utils_strdup("default");
     }
     // Load, append, save
     size_t count = 0;

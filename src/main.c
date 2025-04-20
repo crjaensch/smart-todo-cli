@@ -28,6 +28,8 @@ static void prompt_input(const char *prompt, char *buf, size_t bufsize) {
     cbreak();
 }
 
+#define MAX_PROJECTS 64
+
 int main(int argc, char *argv[]) {
     if (argc >= 2 && strcmp(argv[1], "ai-chat") == 0) {
         return ai_chat_repl();
@@ -51,10 +53,24 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Load projects
+    task_manager_load_projects();
+
+    // Build initial projects list from task manager
+    char **projects = NULL;
+    size_t proj_count = task_manager_get_projects(&projects);
+    if (proj_count == 0) {
+        task_manager_add_project("default");
+        proj_count = task_manager_get_projects(&projects);
+    }
+    size_t proj_selected = 0;
+    const char *current_project = projects[proj_selected];
+
     // Initialize UI
     if (ui_init() != 0) {
         fprintf(stderr, "Failed to initialize UI.\n");
         task_manager_cleanup(tasks, count);
+        free(projects);
         return 1;
     }
 
@@ -68,11 +84,14 @@ int main(int argc, char *argv[]) {
         if (!disp) {
             ui_teardown();
             task_manager_cleanup(tasks, count);
+            free(projects);
             fprintf(stderr, "Failed to allocate memory for display list.\n");
             return 1;
         }
         
-        size_t disp_count = task_manager_filter_by_search(tasks, count, search_term, disp);
+        // filter by current project first
+        size_t tmp_count = task_manager_filter_by_project(tasks, count, current_project, disp);
+        size_t disp_count = task_manager_filter_by_search(disp, tmp_count, search_term, disp);
         disp[disp_count] = NULL;
         
         if (selected >= disp_count && disp_count > 0) selected = disp_count - 1;
@@ -80,6 +99,7 @@ int main(int argc, char *argv[]) {
         // Draw UI
         clear();
         ui_draw_header(search_term[0] ? search_term : "All Tasks");
+        ui_draw_projects(projects, proj_count, proj_selected);
         ui_draw_tasks(disp, disp_count, selected);
         
         // Add a suggestion for the selected task if applicable
@@ -119,6 +139,55 @@ int main(int argc, char *argv[]) {
         int ch = ui_get_input();
         if (ch == 'q') break;
         switch (ch) {
+            case KEY_LEFT:
+            case 'h':
+                if (proj_selected > 0) proj_selected--;
+                current_project = projects[proj_selected];
+                selected = 0;
+                break;
+            case KEY_RIGHT:
+            case 'l':
+                if (proj_selected + 1 < proj_count) proj_selected++;
+                current_project = projects[proj_selected];
+                selected = 0;
+                break;
+            case '+': { // Add new project
+                char proj_name[64];
+                prompt_input("New project name:", proj_name, sizeof(proj_name));
+                if (proj_name[0] != '\0') {
+                    if (task_manager_add_project(proj_name) == 0) {
+                        free(projects);
+                        proj_count = task_manager_get_projects(&projects);
+                        proj_selected = proj_count - 1;
+                        current_project = projects[proj_selected];
+                    } else {
+                        mvprintw(LINES - 2, 1, "Failed to add project");
+                        clrtoeol();
+                        refresh();
+                        napms(1500);
+                    }
+                }
+                break;
+            }
+            case '-': { // Delete project
+                if (proj_count <= 1) break; // Don't allow deleting last project
+                const char *to_delete = projects[proj_selected];
+                if (strcmp(to_delete, "default") == 0) break; // Don't allow deleting default
+                int del_result = task_manager_delete_project(to_delete, tasks, count);
+                if (del_result == 0) {
+                    task_manager_save_projects();
+                    free(projects);
+                    proj_count = task_manager_get_projects(&projects);
+                    if (proj_selected >= proj_count) proj_selected = proj_count - 1;
+                    current_project = projects[proj_selected];
+                } else {
+                    mvprintw(LINES - 2, 1, "Only projects without tasks can be deleted");
+                    clrtoeol();
+                    refresh();
+                    napms(1500);
+                }
+                break;
+            }
             case KEY_DOWN:
             case 'j':
                 if (selected + 1 < disp_count) selected++;
@@ -152,7 +221,7 @@ int main(int argc, char *argv[]) {
                 time_t due = utils_parse_date(date_str);
                 
                 // Add task using task manager
-                if (task_manager_add_task(&tasks, &count, name, due, (const char **)tag_tokens, tag_count, prio) != 0) {
+                if (task_manager_add_task(&tasks, &count, name, due, (const char **)tag_tokens, tag_count, prio, current_project) != 0) {
                     mvprintw(LINES - 2, 1, "Failed to add task");
                     clrtoeol();
                     refresh();
@@ -299,6 +368,8 @@ int main(int argc, char *argv[]) {
     // Cleanup
     ui_teardown();
     task_manager_save_tasks(tasks, count);
+    task_manager_save_projects();
     task_manager_cleanup(tasks, count);
+    free(projects);
     return 0;
 }

@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug smartodo",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/smartodo_debug",
+      "args": [],
+      "cwd": "${workspaceFolder}/src"
+    },
+    {
+      "name": "Debug with AI Chat",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/smartodo_debug",
+      "args": ["ai-chat"],
+      "cwd": "${workspaceFolder}/src"
+    },
+    {
+      "name": "Attach to Process",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/src/smartodo_debug",
+      "processId": "${command:pickProcess}"
+    }
+  ]
+}
