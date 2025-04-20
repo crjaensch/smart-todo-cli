@@ -52,6 +52,9 @@ When you run `./smartodo` without arguments, it enters an interactive REPL with 
 
 ```
 j/k or ↓/↑ - Navigate up and down the task list
+h/l or ←/→ - Navigate between projects in the sidebar
++ - Add a new project
+- - Delete the current project (only works for empty projects)
 a - Add a new task (prompts for details)
 d - Delete the selected task
 e - Edit the selected task (prompts for new details)
