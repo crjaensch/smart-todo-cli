@@ -7,8 +7,8 @@ DEBUGFLAGS = $(CFLAGS) -g -O0
 LDFLAGS = -L/opt/homebrew/lib -lcjson -lncurses -lcurl
 
 # Sources and objects
-SRCS   = main.c ui.c storage.c task.c ai_assist.c ai_chat.c llm_api.c utils.c task_manager.c
-OBJS   = main.o task.o storage.o ai_assist.o ai_chat.o llm_api.o ui.o utils.o task_manager.o
+SRCS   = main.c ui.c storage.c task.c ai_assist.c ai_chat.c ai_chat_actions.c llm_api.c utils.c task_manager.c
+OBJS   = main.o task.o storage.o ai_assist.o ai_chat.o ai_chat_actions.o llm_api.o ui.o utils.o task_manager.o
 DEBUG_OBJS = $(OBJS:.o=.debug.o)
 TARGET = smartodo
 DEBUG_TARGET = $(TARGET)_debug
@@ -33,10 +33,16 @@ $(DEBUG_TARGET): $(DEBUG_OBJS)
 %.debug.o: %.c ui.h storage.h task.h ai_assist.h utils.h task_manager.h
 	$(CC) $(DEBUGFLAGS) -c $< -o $@
 
-ai_chat.o: ai_chat.c ai_chat.h
+ai_chat.o: ai_chat.c ai_chat.h ai_chat_actions.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-ai_chat.debug.o: ai_chat.c ai_chat.h
+ai_chat.debug.o: ai_chat.c ai_chat.h ai_chat_actions.h
+	$(CC) $(DEBUGFLAGS) -c $< -o $@
+
+ai_chat_actions.o: ai_chat_actions.c ai_chat_actions.h task.h task_manager.h utils.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+ai_chat_actions.debug.o: ai_chat_actions.c ai_chat_actions.h task.h task_manager.h utils.h
 	$(CC) $(DEBUGFLAGS) -c $< -o $@
 
 llm_api.o: llm_api.c llm_api.h
