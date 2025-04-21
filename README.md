@@ -115,8 +115,8 @@ export OPENAI_API_KEY="your-api-key-here"
 
 ## Configuration
 
-Tasks are stored in `$HOME/.todo-app/tasks.json`.
-Project names are stored in `$HOME/.todo-app/projects.json`.
+- Tasks are stored in `$HOME/.todo-app/tasks.json`.
+- Project names are stored in `$HOME/.todo-app/projects.json`.
 
 ## License
 
