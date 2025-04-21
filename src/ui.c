@@ -235,6 +235,10 @@ void ui_draw_suggestion(int y, const char *suggestion) {
     if (!suggestion || !suggestion[0]) return;
     
     int offsetx = PROJECT_COL_WIDTH + 1;
+    // Blank line above suggestion
+    move(y - 1, offsetx);
+    clrtoeol();
+    mvaddch(y - 1, PROJECT_COL_WIDTH, ACS_VLINE);
     // Draw the arrow indicator using ASCII alternative
     attron(COLOR_PAIR(CP_APPROACH));
     mvprintw(y, offsetx, "->");

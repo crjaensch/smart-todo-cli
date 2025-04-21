@@ -301,14 +301,6 @@ int ai_chat_repl(void) {
         ui_draw_projects(projects, project_count, selected_project_idx);
         ui_draw_tasks(disp, disp_count, selected);
 
-        // Add blank line after task list before suggestion
-        if (disp_count > 0) {
-            int blank_y = 2 + (int)disp_count;
-            move(blank_y, PROJECT_COL_WIDTH + 1);
-            clrtoeol();
-            mvaddch(blank_y, PROJECT_COL_WIDTH, ACS_VLINE);
-        }
-
         // Suggestion under task list
         int suggestion_y = 3 + (int)disp_count;
         if (disp_count > 0 && selected < disp_count) {
