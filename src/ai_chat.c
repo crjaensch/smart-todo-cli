@@ -163,10 +163,11 @@ static char* generate_ai_suggestion(Task *task) {
         due_str,
         task->status == STATUS_DONE ? "completed" : "pending");
     
-    // Call the LLM API with a smaller, faster model for suggestions
-    char *raw_response = NULL;
-    if (llm_chat(system_prompt, user_prompt, &raw_response, 0, "gpt-4.1-nano") != 0 || !raw_response) {
-        // If API call fails, provide a fallback suggestion
+    // Call LLM and get structured response
+    LlmChatResponse *llm_resp = NULL;
+    if (llm_chat(system_prompt, user_prompt, &llm_resp, 0, "gpt-4.1-nano") != 0 || !llm_resp || llm_resp->n_choices < 1) {
+        llm_chat_response_free(llm_resp);
+        // fallback suggestion
         if (task->priority == PRIORITY_HIGH) {
             strcpy(suggestion, "Break into smaller steps");
         } else {
@@ -174,49 +175,13 @@ static char* generate_ai_suggestion(Task *task) {
         }
         return suggestion;
     }
-    
-    // Parse the JSON response
-    cJSON *json = cJSON_Parse(raw_response);
-    if (!json) {
-        // JSON parsing failed, use the raw response but truncate if needed
-        size_t len = strlen(raw_response);
-        if (len > 127) len = 127;
-        strncpy(suggestion, raw_response, len);
-        suggestion[len] = '\0';
-        free(raw_response);
-        return suggestion;
-    }
-    
-    // Extract the content from the JSON response
-    cJSON *choices = cJSON_GetObjectItem(json, "choices");
-    if (choices && cJSON_IsArray(choices) && cJSON_GetArraySize(choices) > 0) {
-        cJSON *first_choice = cJSON_GetArrayItem(choices, 0);
-        if (first_choice) {
-            cJSON *message = cJSON_GetObjectItem(first_choice, "message");
-            if (message) {
-                cJSON *content = cJSON_GetObjectItem(message, "content");
-                if (content && cJSON_IsString(content) && content->valuestring) {
-                    // Copy the content to our suggestion buffer
-                    strncpy(suggestion, content->valuestring, 127);
-                    suggestion[127] = '\0';
-                }
-            }
-        }
-    }
-    
-    // If we couldn't extract the content, provide a fallback
-    if (suggestion[0] == '\0') {
-        if (task->priority == PRIORITY_HIGH) {
-            strcpy(suggestion, "Break into smaller steps");
-        } else {
-            strcpy(suggestion, "Consider prioritizing this task");
-        }
-    }
-    
-    // Clean up
-    cJSON_Delete(json);
-    free(raw_response);
-    
+    // Copy AI's content (truncate to buffer size)
+    const char *resp_txt = llm_resp->choices[0].message.content;
+    size_t len = strlen(resp_txt);
+    if (len > 127) len = 127;
+    memcpy(suggestion, resp_txt, len);
+    suggestion[len] = '\0';
+    llm_chat_response_free(llm_resp);
     return suggestion;
 }
 
@@ -478,52 +443,26 @@ int ai_chat_repl(void) {
         char sys_prompt[4096]; // Increased size
         build_system_prompt(sys_prompt, sizeof(sys_prompt), disp, disp_count);
 
-        // 2. Call LLM
-        // NOTE: We are not using chat history here for simplicity, sending the full context each time.
-        char *llm_response_json = NULL;
-        // show_message("Thinking..."); // Optional feedback
-        int llm_status = llm_chat(sys_prompt, user_input, &llm_response_json, 0, NULL); // temperature=0 for deterministic JSON
-
-        if (llm_status != 0 || !llm_response_json || llm_response_json[0] == '\0') {
+        // 2. Call LLM and get structured response
+        LlmChatResponse *llm_resp = NULL;
+        int llm_status = llm_chat(sys_prompt, user_input, &llm_resp, 0, NULL);
+        if (llm_status != 0 || !llm_resp || llm_resp->n_choices < 1) {
             snprintf(last_error, MAX_ERR_LEN, "AI interaction failed (status: %d)", llm_status);
-            if (llm_response_json) free(llm_response_json);
-            continue; // Go back to draw the error
-        }
-
-        // 3. Parse JSON Response - first extract content from OpenAI response
-        cJSON *api_response = cJSON_Parse(llm_response_json);
-        if (!api_response) {
-            snprintf(last_error, MAX_ERR_LEN, "Failed to parse API response JSON");
-            free(llm_response_json);
+            llm_chat_response_free(llm_resp);
             continue;
         }
-        
-        // Extract the content from the OpenAI response
+        // extract the AI's JSON content string
         char *content = NULL;
-        cJSON *choices = cJSON_GetObjectItemCaseSensitive(api_response, "choices");
-        if (choices && cJSON_IsArray(choices) && cJSON_GetArraySize(choices) > 0) {
-            cJSON *first_choice = cJSON_GetArrayItem(choices, 0);
-            if (first_choice) {
-                cJSON *message = cJSON_GetObjectItemCaseSensitive(first_choice, "message");
-                if (message) {
-                    cJSON *content_item = cJSON_GetObjectItemCaseSensitive(message, "content");
-                    if (content_item && cJSON_IsString(content_item)) {
-                        content = strdup(content_item->valuestring);
-                    }
-                }
-            }
+        if (llm_resp->choices[0].message.content) {
+            content = strdup(llm_resp->choices[0].message.content);
         }
-        
-        // Free the original API response JSON
-        free(llm_response_json);
-        cJSON_Delete(api_response);
-        
+        llm_chat_response_free(llm_resp);
         if (!content) {
             snprintf(last_error, MAX_ERR_LEN, "Could not extract content from API response");
             continue;
         }
-        
-        // Now parse the actual content as JSON
+
+        // 3. Parse JSON Response
         cJSON *root = cJSON_Parse(content);
         free(content); // Free the extracted content string
 
@@ -544,7 +483,7 @@ int ai_chat_repl(void) {
         const char *action = action_item->valuestring;
         cJSON *params = params_item;
 
-        // 4. Execute Action
+        // 3. Execute Action
         ActionResult result = ACTION_ERROR;
 
         if (strcmp(action, "add_task") == 0) {

@@ -59,49 +59,19 @@ void ai_smart_add(const char *prompt, int debug) {
         "  \"status\": \"pending\"\n"
         "}\n",
         today_str);
-    char *llm_raw = NULL;
-    int llm_status = llm_chat(sys, prompt, &llm_raw, debug, NULL);
-    if (llm_status != 0 || !llm_raw) {
+    // Call LLM and get structured response
+    LlmChatResponse *llm_resp = NULL;
+    if (llm_chat(sys, prompt, &llm_resp, debug, NULL) != 0 || !llm_resp || llm_resp->n_choices < 1) {
         if (debug) fprintf(stderr, "[ai_smart_add] LLM call failed\n");
-        if (llm_raw) free(llm_raw);
+        llm_chat_response_free(llm_resp);
         exit(1);
     }
-    if (debug) fprintf(stderr, "[ai_smart_add] Raw LLM response: %s\n", llm_raw);
-    // Parse response
-    cJSON *resp = cJSON_Parse(llm_raw);
-    if (!resp) {
-        if (debug) fprintf(stderr, "OpenAI response not JSON. Raw: %s\n", llm_raw);
-        free(llm_raw);
-        exit(1);
-    }
-    cJSON *choices = cJSON_GetObjectItem(resp, "choices");
-    if (!choices || !cJSON_IsArray(choices)) {
-        if (debug) fprintf(stderr, "No choices. Full response: %s\n", llm_raw);
-        cJSON_Delete(resp);
-        free(llm_raw);
-        exit(1);
-    }
-    cJSON *msg = cJSON_GetObjectItem(cJSON_GetArrayItem(choices, 0), "message");
-    if (!msg) {
-        if (debug) fprintf(stderr, "No message. Full response: %s\n", llm_raw);
-        cJSON_Delete(resp);
-        free(llm_raw);
-        exit(1);
-    }
-    cJSON *content = cJSON_GetObjectItem(msg, "content");
-    if (!content || !cJSON_IsString(content)) {
-        if (debug) fprintf(stderr, "No content. Full response: %s\n", llm_raw);
-        cJSON_Delete(resp);
-        free(llm_raw);
-        exit(1);
-    }
-    if (debug) fprintf(stderr, "[ai_smart_add] LLM content: %s\n", content->valuestring);
-    // Parse the JSON object from content
-    Task *t = task_from_json(content->valuestring);
+    if (debug) fprintf(stderr, "[ai_smart_add] LLM content: %s\n", llm_resp->choices[0].message.content);
+    // Parse the JSON object from LLM content
+    Task *t = task_from_json(llm_resp->choices[0].message.content);
+    llm_chat_response_free(llm_resp);
     if (!t) {
-        if (debug) fprintf(stderr, "Could not parse task JSON from LLM. Content: %s\n", content->valuestring);
-        cJSON_Delete(resp);
-        free(llm_raw);
+        if (debug) fprintf(stderr, "Could not parse task JSON from LLM. Content: %s\n", llm_resp->choices[0].message.content);
         exit(1);
     }
     if (t && (!t->project || t->project[0]=='\0')) {
@@ -117,12 +87,8 @@ void ai_smart_add(const char *prompt, int debug) {
     if (storage_save_tasks(tasks, count) != 0) {
         if (debug) fprintf(stderr, "Failed to save new task\n");
         storage_free_tasks(tasks, count);
-        cJSON_Delete(resp);
-        free(llm_raw);
         exit(1);
     }
     printf("AI task added: %s\n", t->name);
     storage_free_tasks(tasks, count);
-    cJSON_Delete(resp);
-    free(llm_raw);
 }

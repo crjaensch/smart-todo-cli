@@ -40,13 +40,13 @@ static size_t write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
  * 
  * @param system_prompt The system prompt.
  * @param user_prompt The user prompt.
- * @param response The response from the API.
+ * @param response_obj The response from the API.
  * @param debug Whether to print debug messages.
  * @param model The model to use (optional, defaults to gpt-4.1-mini).
  * 
  * @return 0 on success, non-zero on failure.
  */
-int llm_chat(const char *system_prompt, const char *user_prompt, char **response, int debug, const char *model) {
+int llm_chat(const char *system_prompt, const char *user_prompt, LlmChatResponse **response_obj, int debug, const char *model) {
     const char *api_key = getenv("OPENAI_API_KEY");
     if (!api_key) {
         if (debug) fprintf(stderr, "OPENAI_API_KEY not set\n");
@@ -99,10 +99,69 @@ int llm_chat(const char *system_prompt, const char *user_prompt, char **response
         return 3;
     }
     if (debug) fprintf(stderr, "[llm_chat] Raw response: %s\n", chunk.ptr);
-    *response = chunk.ptr;
+    // clean up request object
+    cJSON_Delete(root);
+    // parse JSON and build structured response
+    cJSON *json = cJSON_Parse(chunk.ptr);
+    if (!json) {
+        free(chunk.ptr);
+        curl_easy_cleanup(curl);
+        curl_slist_free_all(headers);
+        free(json_body);
+        return 4;
+    }
+    LlmChatResponse *resp = calloc(1, sizeof(*resp));
+    resp->http_status = http_code;
+    // top-level fields
+    cJSON *item;
+    item = cJSON_GetObjectItem(json, "id"); if (cJSON_IsString(item)) resp->id = strdup(item->valuestring);
+    item = cJSON_GetObjectItem(json, "object"); if (cJSON_IsString(item)) resp->object = strdup(item->valuestring);
+    item = cJSON_GetObjectItem(json, "created"); if (cJSON_IsNumber(item)) resp->created = item->valueint;
+    item = cJSON_GetObjectItem(json, "model"); if (cJSON_IsString(item)) resp->model = strdup(item->valuestring);
+    // choices array
+    cJSON *choices = cJSON_GetObjectItem(json, "choices");
+    if (cJSON_IsArray(choices)) {
+        resp->n_choices = cJSON_GetArraySize(choices);
+        resp->choices = calloc(resp->n_choices, sizeof(*resp->choices));
+        for (size_t i = 0; i < resp->n_choices; ++i) {
+            cJSON *ch = cJSON_GetArrayItem(choices, i);
+            cJSON *idx = cJSON_GetObjectItem(ch, "index"); if (cJSON_IsNumber(idx)) resp->choices[i].index = idx->valueint;
+            cJSON *fr = cJSON_GetObjectItem(ch, "finish_reason"); if (cJSON_IsString(fr)) resp->choices[i].finish_reason = strdup(fr->valuestring);
+            cJSON *msg = cJSON_GetObjectItem(ch, "message");
+            if (cJSON_IsObject(msg)) {
+                cJSON *role = cJSON_GetObjectItem(msg, "role"); if (cJSON_IsString(role)) resp->choices[i].message.role = strdup(role->valuestring);
+                cJSON *content = cJSON_GetObjectItem(msg, "content"); if (cJSON_IsString(content)) resp->choices[i].message.content = strdup(content->valuestring);
+            }
+        }
+    }
+    // usage
+    cJSON *usage = cJSON_GetObjectItem(json, "usage");
+    if (cJSON_IsObject(usage)) {
+        item = cJSON_GetObjectItem(usage, "prompt_tokens"); if (cJSON_IsNumber(item)) resp->usage.prompt_tokens = item->valueint;
+        item = cJSON_GetObjectItem(usage, "completion_tokens"); if (cJSON_IsNumber(item)) resp->usage.completion_tokens = item->valueint;
+        item = cJSON_GetObjectItem(usage, "total_tokens"); if (cJSON_IsNumber(item)) resp->usage.total_tokens = item->valueint;
+    }
+    resp->raw_json = chunk.ptr;
+    cJSON_Delete(json);
     curl_easy_cleanup(curl);
     curl_slist_free_all(headers);
-    cJSON_Delete(root);
     free(json_body);
+    *response_obj = resp;
     return 0;
+}
+
+// Free a structured LLM response
+void llm_chat_response_free(LlmChatResponse *resp) {
+    if (!resp) return;
+    for (size_t i = 0; i < resp->n_choices; ++i) {
+        free(resp->choices[i].message.role);
+        free(resp->choices[i].message.content);
+        free(resp->choices[i].finish_reason);
+    }
+    free(resp->choices);
+    free(resp->id);
+    free(resp->object);
+    free(resp->model);
+    free(resp->raw_json);
+    free(resp);
 }
