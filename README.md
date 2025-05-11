@@ -2,6 +2,10 @@
 
 A minimalistic terminal user interface (TUI) todo app with AI assistance. Manage your tasks efficiently with natural language processing and a clean terminal interface.
 
+
+Want more in-depth technical information about smart-todo-tui? Visit [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/crjaensch/Smart-Todo-TUI)
+
+
 ## Features
 
 ### Standard Mode
