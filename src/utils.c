@@ -1,17 +1,24 @@
 #include "utils.h"
+#include "date_parser.h"
 #include <stdlib.h>
 #include <string.h>
 #include <curses.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdbool.h>
 
 // Parse date in various formats to time_t (midnight UTC), 0 if empty/invalid
 time_t utils_parse_date(const char *s) {
     if (!s || s[0] == '\0') return 0;
     
-    struct tm tm = {0};
+    // First try natural language parsing
+    time_t result = 0;
+    if (parse_natural_date(s, &result)) {
+        return result;
+    }
     
-    // Try different date formats in order of preference
+    // Fall back to standard date formats
+    struct tm tm = {0};
     
     // 1. ISO 8601 date with time (YYYY-MM-DDThh:mm:ssZ)
     if (strptime(s, "%Y-%m-%dT%H:%M:%SZ", &tm)) {

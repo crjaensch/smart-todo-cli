@@ -3,6 +3,8 @@
 #include <string.h>
 #include <time.h>
 #include <curses.h>
+#include <ctype.h>
+#include <stdbool.h>
 #include "ai_assist.h"
 #include "ui.h"
 #include "storage.h"
@@ -126,8 +128,19 @@ int main(int argc, char *argv[]) {
             
             // If we have a suggestion, display it below the task list
             if (suggestion[0] != '\0') {
-                int suggestion_y = 1 + disp_count + 1; // One line below the task list
-                if (suggestion_y < LINES - 2) { // Make sure it fits on screen
+                // Position the suggestion with a gap from the task list
+                // Leave 2 lines of space between the last task and the suggestion
+                int suggestion_y = 2 + disp_count + 2;
+                
+                // Make sure it fits on screen and leaves room for the footer
+                if (suggestion_y < LINES - 3) {
+                    // Clear any previous suggestion that might be in the way
+                    move(suggestion_y - 1, PROJECT_COL_WIDTH + 1);
+                    clrtoeol();
+                    move(suggestion_y, PROJECT_COL_WIDTH + 1);
+                    clrtoeol();
+                    
+                    // Draw the suggestion
                     ui_draw_suggestion(suggestion_y, suggestion);
                 }
             }
@@ -197,28 +210,116 @@ int main(int argc, char *argv[]) {
                 if (selected > 0) selected--;
                 break;
             case 'a': {
-                char name[128], date_str[16], tags_str[128], prio_str[8];
-                prompt_input("Name:", name, sizeof(name));
-                prompt_input("Due Date (YYYY-MM-DD, empty for none):", date_str, sizeof(date_str));
-                prompt_input("Tags (comma-separated):", tags_str, sizeof(tags_str));
-                prompt_input("Priority (low/med/high):", prio_str, sizeof(prio_str));
+                char name[128], date_str[64], tags_str[128], prio_str[8], confirm[8];
                 
-                // Parse tags
-                char *tag_tokens[16];
-                size_t tag_count = 0;
-                char *tok = strtok(tags_str, ",");
-                while (tok && tag_count < 16) {
-                    tag_tokens[tag_count++] = tok;
-                    tok = strtok(NULL, ",");
+                // Get task name
+                prompt_input("Task name:", name, sizeof(name));
+                if (name[0] == '\0') break; // User cancelled
+                
+                // Get and parse due date with natural language support
+                bool date_valid = false;
+                time_t due = 0;
+                
+                while (!date_valid) {
+                    prompt_input("Due (e.g., 'tomorrow 2pm', 'next monday', 'may 20'):", date_str, sizeof(date_str));
+                    
+                    if (date_str[0] == '\0') {
+                        // No due date
+                        date_valid = true;
+                        break;
+                    }
+                    
+                    // Try to parse the date
+                    due = utils_parse_date(date_str);
+                    
+                    if (due == 0) {
+                        // Invalid date format
+                        mvprintw(LINES - 2, 1, "Invalid date format. Try 'tomorrow', 'next monday', etc.");
+                        clrtoeol();
+                        refresh();
+                        napms(1500);
+                        continue;
+                    }
+                    
+                    // Show the parsed date for confirmation
+                    char formatted_date[64];
+                    struct tm tm_due;
+                    localtime_r(&due, &tm_due);
+                    strftime(formatted_date, sizeof(formatted_date), "%A, %B %d at %I:%M %p", &tm_due);
+                    
+                    snprintf(confirm, sizeof(confirm), "%s", "");
+                    mvprintw(LINES - 2, 1, "Due: %s. Okay? (Y/n): ", formatted_date);
+                    clrtoeol();
+                    refresh();
+                    
+                    // Get single character input
+                    noecho();
+                    cbreak();
+                    int ch = getch();
+                    echo();
+                    
+                    if (ch == 'n' || ch == 'N') {
+                        // User wants to re-enter the date
+                        continue;
+                    }
+                    
+                    // Date is valid and confirmed
+                    date_valid = true;
                 }
                 
-                // Parse priority
-                Priority prio = PRIORITY_LOW;
-                if (strcasecmp(prio_str, "high") == 0) prio = PRIORITY_HIGH;
-                else if (strncasecmp(prio_str, "med", 3) == 0) prio = PRIORITY_MEDIUM;
+                // Get tags
+                prompt_input("Tags (comma-separated, optional):", tags_str, sizeof(tags_str));
                 
-                // Parse due date
-                time_t due = utils_parse_date(date_str);
+                // Parse tags
+                char *tag_tokens[16] = {0};
+                size_t tag_count = 0;
+                if (tags_str[0] != '\0') {
+                    char tags_copy[128];
+                    strncpy(tags_copy, tags_str, sizeof(tags_copy) - 1);
+                    tags_copy[sizeof(tags_copy) - 1] = '\0';
+                    
+                    char *saveptr;
+                    char *tok = strtok_r(tags_copy, ",", &saveptr);
+                    while (tok && tag_count < 16) {
+                        // Trim whitespace
+                        while (isspace(*tok)) tok++;
+                        char *end = tok + strlen(tok) - 1;
+                        while (end > tok && isspace(*end)) end--;
+                        *(end + 1) = '\0';
+                        
+                        if (*tok) {
+                            tag_tokens[tag_count] = strdup(tok);
+                            if (tag_tokens[tag_count]) {
+                                tag_count++;
+                            }
+                        }
+                        tok = strtok_r(NULL, ",", &saveptr);
+                    }
+                }
+                
+                // Get priority with natural language support
+                Priority prio = PRIORITY_LOW;
+                bool prio_valid = false;
+                
+                while (!prio_valid) {
+                    prompt_input("Priority (low/medium/high, default=low):", prio_str, sizeof(prio_str));
+                    
+                    if (prio_str[0] == '\0' || strncasecmp(prio_str, "low", 3) == 0) {
+                        prio = PRIORITY_LOW;
+                        prio_valid = true;
+                    } else if (strncasecmp(prio_str, "med", 3) == 0) {
+                        prio = PRIORITY_MEDIUM;
+                        prio_valid = true;
+                    } else if (strncasecmp(prio_str, "high", 4) == 0) {
+                        prio = PRIORITY_HIGH;
+                        prio_valid = true;
+                    } else {
+                        mvprintw(LINES - 2, 1, "Invalid priority. Use 'low', 'medium', or 'high'.");
+                        clrtoeol();
+                        refresh();
+                        napms(1500);
+                    }
+                }
                 
                 // Add task using task manager
                 if (task_manager_add_task(&tasks, &count, name, due, (const char **)tag_tokens, tag_count, prio, current_project) != 0) {
@@ -228,12 +329,13 @@ int main(int argc, char *argv[]) {
                     napms(1500);
                 }
                 
-                // Sort if needed
-                if (sort_mode == BY_NAME) {
-                    task_manager_sort_by_name(tasks, count);
-                } else {
-                    task_manager_sort_by_due(tasks, count);
+                // Free allocated tag strings
+                for (size_t i = 0; i < tag_count; i++) {
+                    free(tag_tokens[i]);
                 }
+                
+                // Sort tasks by due date
+                task_manager_sort_by_due(tasks, count);
                 break;
             }
             case 'd': {
@@ -262,7 +364,7 @@ int main(int argc, char *argv[]) {
             case 'e': {
                 if (disp_count == 0) break;
                 Task *t = disp[selected];
-                char name[128], date_str[16], tags_str[128], prio_str[8];
+                char name[128], date_str[64], tags_str[128], prio_str[8], edit_name[128];
                 
                 // Pre-fill with current values
                 strncpy(name, t->name ? t->name : "", sizeof(name));
@@ -285,40 +387,133 @@ int main(int argc, char *argv[]) {
 
                 // Prompt for edits
                 prompt_input("Edit Name:", name, sizeof(name));
-                prompt_input("Edit Due Date (YYYY-MM-DD, empty for none):", date_str, sizeof(date_str));
-                prompt_input("Edit Tags (comma-separated):", tags_str, sizeof(tags_str));
-                prompt_input("Edit Priority (low/med/high):", prio_str, sizeof(prio_str));
+                // Edit name if provided
+                if (name[0] != '\0') {
+                    strncpy(edit_name, name, sizeof(edit_name) - 1);
+                    edit_name[sizeof(edit_name) - 1] = '\0';
+                } else {
+                    strncpy(edit_name, disp[selected]->name, sizeof(edit_name) - 1);
+                    edit_name[sizeof(edit_name) - 1] = '\0';
+                }
 
-                // Parse tags for update
-                char *tag_tokens[16];
-                size_t tag_count = 0;
+                // Edit due date with natural language support
+                bool date_valid = false;
+                time_t new_due = -1; // -1 means don't change
                 
-                if (tags_str[0] != '\0') {
-                    char *tok = strtok(tags_str, ",");
-                    while (tok && tag_count < 16) {
-                        tag_tokens[tag_count++] = tok;
-                        tok = strtok(NULL, ",");
+                prompt_input("New due date (e.g., 'tomorrow 2pm', 'next monday', 'may 20', empty to keep):", 
+                               date_str, sizeof(date_str));
+                
+                if (date_str[0] != '\0') {
+                    while (!date_valid) {
+                        // Try to parse the date
+                        new_due = utils_parse_date(date_str);
+                        
+                        if (new_due == 0) {
+                            // Invalid date format
+                            mvprintw(LINES - 2, 1, "Invalid date format. Try 'tomorrow', 'next monday', etc.");
+                            clrtoeol();
+                            refresh();
+                            napms(1500);
+                            prompt_input("New due date (e.g., 'tomorrow 2pm', 'next monday', 'may 20'):", 
+                                       date_str, sizeof(date_str));
+                            if (date_str[0] == '\0') break;
+                            continue;
+                        }
+                        
+                        // Show the parsed date for confirmation
+                        char formatted_date[64];
+                        struct tm tm_due;
+                        localtime_r(&new_due, &tm_due);
+                        strftime(formatted_date, sizeof(formatted_date), "%A, %B %d at %I:%M %p", &tm_due);
+                        
+                        mvprintw(LINES - 2, 1, "New due date: %s. Okay? (Y/n): ", formatted_date);
+                        clrtoeol();
+                        refresh();
+                        
+                        // Get single character input
+                        noecho();
+                        cbreak();
+                        int ch = getch();
+                        echo();
+                        
+                        if (ch == 'n' || ch == 'N') {
+                            // User wants to re-enter the date
+                            prompt_input("New due date (e.g., 'tomorrow 2pm', 'next monday', 'may 20'):", 
+                                       date_str, sizeof(date_str));
+                            if (date_str[0] == '\0') break;
+                            continue;
+                        }
+                        
+                        // Date is valid and confirmed
+                        date_valid = true;
                     }
                 }
                 
-                // Parse priority for update
-                int prio = -1; // -1 means don't change
-                if (strcasecmp(prio_str, "high") == 0) prio = PRIORITY_HIGH;
-                else if (strncasecmp(prio_str, "med", 3) == 0) prio = PRIORITY_MEDIUM;
-                else if (strcasecmp(prio_str, "low") == 0) prio = PRIORITY_LOW;
+                // Edit tags
+                char new_tags_str[128] = "";
+                prompt_input("Edit Tags (comma-separated, empty to keep):", new_tags_str, sizeof(new_tags_str));
                 
-                // Parse due date for update
-                time_t due = -1; // -1 means don't change
-                if (date_str[0] != '\0') {
-                    due = utils_parse_date(date_str);
+                // Edit priority
+                char new_prio_str[8] = "";
+                prompt_input("Edit Priority (low/medium/high, empty to keep):", new_prio_str, sizeof(new_prio_str));
+                
+                // Parse priority
+                Priority new_prio = disp[selected]->priority;
+                if (new_prio_str[0] != '\0') {
+                    if (strncasecmp(new_prio_str, "high", 4) == 0) {
+                        new_prio = PRIORITY_HIGH;
+                    } else if (strncasecmp(new_prio_str, "med", 3) == 0) {
+                        new_prio = PRIORITY_MEDIUM;
+                    } else if (strncasecmp(new_prio_str, "low", 3) == 0) {
+                        new_prio = PRIORITY_LOW;
+                    }
+                }
+
+                // Parse tags for update
+                char *tag_tokens[16] = {0};
+                size_t tag_count = 0;
+                
+                if (new_tags_str[0] != '\0') {
+                    char tags_copy[128];
+                    strncpy(tags_copy, new_tags_str, sizeof(tags_copy) - 1);
+                    tags_copy[sizeof(tags_copy) - 1] = '\0';
+                    
+                    char *saveptr;
+                    char *tok = strtok_r(tags_copy, ",", &saveptr);
+                    while (tok && tag_count < 16) {
+                        // Trim whitespace
+                        while (isspace(*tok)) tok++;
+                        char *end = tok + strlen(tok) - 1;
+                        while (end > tok && isspace(*end)) end--;
+                        *(end + 1) = '\0';
+                        
+                        if (*tok) {
+                            tag_tokens[tag_count] = strdup(tok);
+                            if (tag_tokens[tag_count]) {
+                                tag_count++;
+                            }
+                        }
+                        tok = strtok_r(NULL, ",", &saveptr);
+                    }
                 }
                 
-                // Update the task
-                if (task_manager_update_task(t, name[0] ? name : NULL, 
-                                           due, 
-                                           tags_str[0] ? (const char **)tag_tokens : NULL, 
-                                           tag_count,
-                                           prio, -1) != 0) {
+                // Update the task using task manager
+                int result = task_manager_update_task(
+                    disp[selected],
+                    edit_name,  // Use the edit_name which has either new name or existing name
+                    date_valid ? new_due : -1,
+                    tag_count > 0 ? (const char **)tag_tokens : NULL,
+                    tag_count,
+                    new_prio_str[0] ? new_prio : -1,
+                    -1  // status (don't change)
+                );
+                
+                // Free allocated tag strings
+                for (size_t i = 0; i < tag_count; i++) {
+                    free(tag_tokens[i]);
+                }
+                
+                if (result != 0) {
                     mvprintw(LINES - 2, 1, "Failed to update task");
                     clrtoeol();
                     refresh();
