@@ -13,6 +13,7 @@ Want more in-depth technical information about smart-todo-tui? Visit [![Ask Deep
 The standard mode provides an interactive terminal interface for managing your tasks:
 
 - Create, edit, and delete tasks
+- Add notes to tasks for additional context and information
 - Set due dates, priorities, and tags
 - Sort tasks by name, creation date, or due date
 - Filter tasks by status, tags, or search terms
@@ -62,9 +63,11 @@ h/l or ←/→ - Navigate between projects in the sidebar
 a - Add a new task (prompts for details)
 d - Delete the selected task
 e - Edit the selected task (prompts for new details)
+n - Add or edit a note for the selected task
+v - Toggle note visibility for the selected task
 m - Toggle task status (done/pending)
 s - Sort tasks by name or date
-/ - Search tasks
+/ - Search tasks (also searches within notes)
 q - Quit the application
 ```
 
@@ -83,7 +86,9 @@ q - Quit the application
 In AI chat mode, you can use natural language commands like:
 
 - "Add a task to call mom tomorrow"
+- "Add a note to the selected task: Remember to ask about her birthday plans"
 - "Show me all my high priority tasks"
+- "Show me tasks that have notes"
 - "Mark the selected task as done"
 - "Reschedule my meeting with John to next Friday"
 - "What tasks are due this week?"
