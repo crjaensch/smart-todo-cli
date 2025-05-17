@@ -70,7 +70,7 @@ void ui_draw_standard_footer(void) {
     int y = LINES - 1;
     attron(A_REVERSE);
     mvhline(y, 0, ' ', COLS);
-    mvprintw(y, 1, "a:Add e:Edit d:Delete m:Mark s:Sort /:Search +:NewProj -:DelProj q:Quit");
+    mvprintw(y, 1, "a:Add e:Edit d:Delete m:Mark v:ViewNote n:EditNote s:Sort /:Search +:NewProj -:DelProj q:Quit");
     attroff(A_REVERSE);
 }
 
@@ -79,7 +79,7 @@ void ui_draw_ai_chat_footer(void) {
     int y = LINES - 1;
     attron(A_REVERSE);
     mvhline(y, 0, ' ', COLS);
-    mvprintw(y, 1, "AI Chat | j/k:Navigate h/l:Proj +:NewProj -:DelProj Enter:Command m:Mark q:Quit");
+    mvprintw(y, 1, "AI Chat | j/k:Navigate h/l:Proj v:ViewNote n:EditNote +:NewProj -:DelProj Enter:Command m:Mark q:Quit");
     attroff(A_REVERSE);
 }
 
@@ -128,7 +128,7 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
         }
         
         // Determine task status indicator
-        char status_brackets[3] = "[ ]";
+        char status_brackets[4] = "[ ]";
         
         if (t->status == STATUS_DONE) {
             status_brackets[0] = '[';
@@ -142,6 +142,12 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
             status_brackets[0] = '[';
             status_brackets[1] = ' ';
             status_brackets[2] = ']';
+        }
+        
+        // Prepare note indicator
+        char note_indicator[4] = "[ ]";
+        if (t->note && t->note[0] != '\0') {
+            note_indicator[1] = 'x';
         }
         
         // Prepare task name with appropriate color
@@ -170,9 +176,16 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
             // Print status indicator
             mvprintw(y, offsetx + 22, "%s", status_brackets);
             
+            // Print note icon (if present)
+            if (t->note && t->note[0] != '\0') {
+                mvprintw(y, offsetx + 26, "📝");  // Note icon
+            } else {
+                mvprintw(y, offsetx + 26, " ");  // Space when no note
+            }
+            
             // Print task name with color
             attron(COLOR_PAIR(cp));
-            mvprintw(y, offsetx + 27, "%s", t->name);
+            mvprintw(y, offsetx + 28, "%s", t->name);
             attroff(COLOR_PAIR(cp));
             
             attroff(A_BOLD);
@@ -209,11 +222,18 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
             // Print status indicator
             mvprintw(y, offsetx + 22, "%s", status_brackets);
             
+            // Print note icon (if present)
+            if (t->note && t->note[0] != '\0') {
+                mvprintw(y, offsetx + 26, "📝");  // Note icon
+            } else {
+                mvprintw(y, offsetx + 26, " ");  // Space when no note
+            }
+            
             // Print task name
             if (t->status != STATUS_DONE) {
                 attron(COLOR_PAIR(cp));
             }
-            mvprintw(y, offsetx + 27, "%s", t->name);
+            mvprintw(y, offsetx + 28, "%s", t->name);
             if (t->status != STATUS_DONE) {
                 attroff(COLOR_PAIR(cp));
             }

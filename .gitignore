@@ -2,3 +2,4 @@
 *.o
 smartodo
 smartodo_debug
+.DS_Store

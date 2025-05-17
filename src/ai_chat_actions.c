@@ -1,6 +1,7 @@
 #include "ai_chat_actions.h"
 #include "task_manager.h"
 #include "utils.h"
+#include "ui.h"  // For PROJECT_COL_WIDTH and UI functions
 #include <string.h>
 #include <time.h>
 #include <ncurses.h>
@@ -646,11 +647,99 @@ ActionResult handle_delete_project(cJSON *params, char ***projects, size_t *proj
     }
 }
 
+// Add a note to a task
+ActionResult handle_add_note(cJSON *params, Task **disp, size_t disp_count, char *last_error) {
+    // Get the task index
+    cJSON *index_item = cJSON_GetObjectItemCaseSensitive(params, "index");
+    if (!cJSON_IsNumber(index_item)) {
+        snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'index' parameter");
+        return ACTION_ERROR;
+    }
+    
+    // Convert from 1-based to 0-based index
+    int idx = index_item->valueint - 1;
+    if (idx < 0 || (size_t)idx >= disp_count) {
+        snprintf(last_error, MAX_ERR_LEN, "Task index %d is out of range", index_item->valueint);
+        return ACTION_ERROR;
+    }
+    
+    // Get the note text
+    cJSON *note_item = cJSON_GetObjectItemCaseSensitive(params, "note");
+    if (!cJSON_IsString(note_item)) {
+        snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'note' parameter");
+        return ACTION_ERROR;
+    }
+    
+    // Set the note on the task
+    Task *task = disp[idx];
+    if (task_set_note(task, note_item->valuestring) != 0) {
+        snprintf(last_error, MAX_ERR_LEN, "Failed to set note for task");
+        return ACTION_ERROR;
+    }
+    
+    // Display a confirmation message
+    utils_show_message("Note added to task.", LINES-2, 2);
+    
+    return ACTION_SUCCESS;
+}
+
+// View a note for a task
+ActionResult handle_view_note(cJSON *params, Task **disp, size_t disp_count, char *last_error) {
+    // Get the task index
+    cJSON *index_item = cJSON_GetObjectItemCaseSensitive(params, "index");
+    if (!cJSON_IsNumber(index_item)) {
+        snprintf(last_error, MAX_ERR_LEN, "Missing or invalid 'index' parameter");
+        return ACTION_ERROR;
+    }
+    
+    // Convert from 1-based to 0-based index
+    int idx = index_item->valueint - 1;
+    if (idx < 0 || (size_t)idx >= disp_count) {
+        snprintf(last_error, MAX_ERR_LEN, "Task index %d is out of range", index_item->valueint);
+        return ACTION_ERROR;
+    }
+    
+    // Get the note from the task
+    Task *task = disp[idx];
+    const char *note = task_get_note(task);
+    
+    // Display the note or a message if there is no note
+    if (!note || note[0] == '\0') {
+        utils_show_message("This task has no note.", LINES-2, 2);
+    } else {
+        // Clear a few lines below the task list for displaying the note
+        int note_y = 3 + disp_count + 1;
+        
+        // Draw a separator line
+        attron(A_DIM);
+        mvhline(note_y, PROJECT_COL_WIDTH + 1, ACS_HLINE, COLS - PROJECT_COL_WIDTH - 2);
+        attroff(A_DIM);
+        
+        // Draw the note header
+        note_y++;
+        attron(A_BOLD);
+        mvprintw(note_y, PROJECT_COL_WIDTH + 1, "Note:");
+        attroff(A_BOLD);
+        note_y++;
+        
+        // Draw the note content
+        mvprintw(note_y, PROJECT_COL_WIDTH + 3, "%s", note);
+        
+        // Wait for user to press a key
+        mvprintw(LINES-2, 1, "Press any key to continue...");
+        refresh();
+        getch();
+    }
+    
+    return ACTION_SUCCESS;
+}
+
 // Handle exit command
 ActionResult handle_exit(cJSON *params, char *last_error) {
-    (void)params;
-    (void)last_error;
+    (void)params; // Suppress unused parameter warning
+    (void)last_error; // Suppress unused parameter warning
     
+    // No parameters needed for exit
     utils_show_message("Exiting AI chat mode...", LINES - 2, 1);
     return ACTION_EXIT;
 }

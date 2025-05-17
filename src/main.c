@@ -441,6 +441,161 @@ static void handle_search_tasks(char *search_term, size_t term_size, size_t *sel
     *selected = 0;
 }
 
+// toggle_note_visibility toggles the visibility of the note for the currently selected task.
+// Global variable to track note scrolling position
+static int note_scroll_offset = 0;
+
+bool toggle_note_visibility(Task **disp, size_t disp_count, size_t selected, bool show_note) {
+    if (disp_count == 0 || selected >= disp_count) {
+        return false; // No task selected, can't view note
+    }
+    
+    Task *task = disp[selected];
+    if (!task) {
+        return false; // Invalid task
+    }
+    
+    // If the task has no note or we're already showing it, hide it
+    if (!task->note || task->note[0] == '\0') {
+        mvprintw(LINES - 2, 1, "This task has no note.");
+        clrtoeol();
+        refresh();
+        napms(1500);
+        return false;
+    }
+    
+    // Reset scroll position when toggling note visibility
+    note_scroll_offset = 0;
+    
+    // Toggle the note visibility
+    return !show_note;
+}
+
+// handle_edit_note allows the user to add or edit a note for the currently selected task.
+void handle_edit_note(Task **disp, size_t disp_count, size_t selected) {
+    if (disp_count == 0 || selected >= disp_count) {
+        return; // No task selected, can't edit note
+    }
+    
+    Task *task = disp[selected];
+    if (!task) {
+        return; // Invalid task
+    }
+    
+    // Prepare buffer for editing, pre-fill with existing note if any
+    char note_buf[MAX_NOTE_LEN] = "";
+    if (task->note) {
+        strncpy(note_buf, task->note, sizeof(note_buf) - 1);
+        note_buf[sizeof(note_buf) - 1] = '\0';
+    }
+    
+    // Create a multi-line input area for note editing
+    clear();
+    
+    // Display header
+    attron(A_BOLD);
+    mvprintw(1, 2, "Edit Note for Task: %s", task->name);
+    attroff(A_BOLD);
+    
+    // Display instructions
+    mvprintw(3, 2, "Enter your note below. Press ESC when done, or clear all text and press ESC to remove the note.");
+    mvprintw(4, 2, "Maximum length: %d characters", MAX_NOTE_LEN - 1);
+    
+    // Draw input area border
+    int input_start_y = 6;
+    int input_height = LINES - input_start_y - 4; // Leave space at bottom for status
+    int input_width = COLS - 4;
+    
+    // Draw a box around the input area
+    box(stdscr, 0, 0);
+    
+    // Enable editing
+    echo();
+    curs_set(1); // Show cursor
+    keypad(stdscr, TRUE); // Enable keypad mode for special keys
+    
+    // Use a simple editor approach - let the user type and handle basic input
+    int note_len = strlen(note_buf);
+    
+    // Show status line
+    mvprintw(LINES - 2, 2, "Press ESC when done. Current length: %d/%d", note_len, MAX_NOTE_LEN - 1);
+    
+    // Create a subwindow for text input
+    WINDOW *input_win = subwin(stdscr, input_height, input_width, input_start_y, 2);
+    if (!input_win) {
+        // Fall back to simple input if subwindow creation fails
+        prompt_input("Enter note (empty to clear):", note_buf, sizeof(note_buf));
+    } else {
+        // Display existing note in the window
+        wprintw(input_win, "%s", note_buf);
+        wrefresh(input_win);
+        
+        // Edit the note
+        int ch;
+        while ((ch = getch()) != 27) { // 27 is ESC key
+            if (ch == KEY_BACKSPACE || ch == 127) {
+                // Handle backspace
+                if (note_len > 0) {
+                    note_len--;
+                    note_buf[note_len] = '\0';
+                    
+                    // Clear the window and redisplay
+                    werase(input_win);
+                    wprintw(input_win, "%s", note_buf);
+                }
+            } else if (ch == KEY_ENTER || ch == '\n' || ch == '\r') {
+                // Handle Enter key - add a newline if there's room
+                if (note_len < MAX_NOTE_LEN - 2) {
+                    note_buf[note_len++] = '\n';
+                    note_buf[note_len] = '\0';
+                }
+            } else if (note_len < MAX_NOTE_LEN - 2 && ch >= 32 && ch <= 126) {
+                // Add printable characters if there's room
+                note_buf[note_len++] = (char)ch;
+                note_buf[note_len] = '\0';
+            }
+            
+            // Update status line with current length
+            mvprintw(LINES - 2, 2, "Press ESC when done. Current length: %d/%d", note_len, MAX_NOTE_LEN - 1);
+            clrtoeol();
+            
+            // Redisplay the note
+            werase(input_win);
+            wprintw(input_win, "%s", note_buf);
+            wrefresh(input_win);
+        }
+        
+        delwin(input_win);
+    }
+    
+    // Restore terminal settings
+    noecho();
+    curs_set(0); // Hide cursor
+    
+    // Redraw the main screen
+    clear();
+    
+    // Re-enable keypad mode for the main screen
+    keypad(stdscr, TRUE);
+    
+    // Update the task's note
+    if (task_set_note(task, note_buf) == 0) {
+        if (note_buf[0] == '\0') {
+            mvprintw(LINES - 2, 1, "Note cleared.");
+        } else {
+            mvprintw(LINES - 2, 1, "Note updated.");
+        }
+        clrtoeol();
+        refresh();
+        napms(1500);
+    } else {
+        mvprintw(LINES - 2, 1, "Failed to update note.");
+        clrtoeol();
+        refresh();
+        napms(1500);
+    }
+}
+
 #define MAX_PROJECTS 64
 
 int main(int argc, char *argv[]) {
@@ -490,6 +645,7 @@ int main(int argc, char *argv[]) {
     size_t selected = 0;
     int sort_mode = BY_CREATION;
     char search_term[64] = "";
+    bool show_note = false; // Track whether we're showing a note
 
     while (1) {
         // Build display list with search/filter
@@ -514,6 +670,130 @@ int main(int argc, char *argv[]) {
         ui_draw_header(search_term[0] ? search_term : "All Tasks");
         ui_draw_projects(projects, proj_count, proj_selected);
         ui_draw_tasks(disp, disp_count, selected);
+        
+        // Display note if show_note is true and there's a selected task with a note
+        if (show_note && disp_count > 0 && selected < disp_count && disp[selected]->note) {
+            // Position the note at the bottom of the screen, above the footer
+            // Reserve more lines for note area (5-6 lines) + 1 for footer
+            int note_area_height = 7; // 1 for separator, 1 for header, 5 for content
+            int note_y = LINES - note_area_height - 1;
+            int max_width = COLS - PROJECT_COL_WIDTH - 4; // Leave some margin
+            int x = PROJECT_COL_WIDTH + 3; // Indented from the left
+            
+            // Draw a separator line
+            attron(A_DIM);
+            mvhline(note_y, PROJECT_COL_WIDTH + 1, ACS_HLINE, COLS - PROJECT_COL_WIDTH - 2);
+            attroff(A_DIM);
+            
+            // Draw the note header with scroll indicators if needed
+            note_y++;
+            attron(A_BOLD);
+            mvprintw(note_y, PROJECT_COL_WIDTH + 1, "Note:");
+            attroff(A_BOLD);
+            if (note_scroll_offset > 0) {
+                mvprintw(note_y, COLS - 20, "↑ more above (k)");
+            }
+            note_y++;
+            
+            // Apply scroll offset to the note pointer
+            const char *note = disp[selected]->note;
+            int skip_lines = note_scroll_offset;
+            while (skip_lines > 0 && note && *note) {
+                // Skip one wrapped line
+                int chars_to_skip = 0;
+                int width = 0;
+                
+                while (note[chars_to_skip] && width < max_width) {
+                    width++;
+                    chars_to_skip++;
+                }
+                
+                // Handle word wrapping
+                if (width >= max_width && chars_to_skip < (int)strlen(note)) {
+                    int last_space = chars_to_skip;
+                    while (last_space > 0 && note[last_space] != ' ') {
+                        last_space--;
+                    }
+                    if (last_space > 0) {
+                        chars_to_skip = last_space;
+                    }
+                }
+                
+                note += chars_to_skip;
+                if (*note == ' ') note++; // Skip space at word boundary
+                skip_lines--;
+            }
+            
+            // Draw the note content with word wrapping (max 5 lines)
+            int visible_lines = 0;
+            int max_visible_lines = 5;
+            bool has_more_content = false;
+            
+            while (note && *note && visible_lines < max_visible_lines) {
+                // Find how much we can print on this line
+                int chars_to_print = 0;
+                int line_width = 0;
+                
+                while (note[chars_to_print] && line_width < max_width) {
+                    line_width++;
+                    chars_to_print++;
+                }
+                
+                // Handle word wrapping
+                if (line_width >= max_width && chars_to_print < (int)strlen(note)) {
+                    int last_space = chars_to_print;
+                    while (last_space > 0 && note[last_space] != ' ') {
+                        last_space--;
+                    }
+                    if (last_space > 0) {
+                        chars_to_print = last_space;
+                    }
+                }
+                
+                // Print this line
+                char line_buf[256];
+                strncpy(line_buf, note, chars_to_print);
+                line_buf[chars_to_print] = '\0';
+                mvprintw(note_y, x, "%s", line_buf);
+                note_y++;
+                visible_lines++;
+                
+                // Move to the next line
+                note += chars_to_print;
+                if (*note == ' ') note++;
+            }
+            
+            // Check if there's more content below
+            has_more_content = (note && *note);
+            
+            // Show appropriate controls based on scroll position
+            attron(A_DIM);
+            if (has_more_content) {
+                mvprintw(note_y, x, "↓ more below (j)");
+            } else if (note_scroll_offset > 0) {
+                mvprintw(note_y, x, "(j/k to scroll, v to hide)");
+            } else {
+                mvprintw(note_y, x, "(Press 'v' to hide note)");
+            }
+            attroff(A_DIM);
+            
+            // Handle scrolling with j/k keys
+            int ch = getch();
+            if (ch == 'j' && has_more_content) {
+                note_scroll_offset++;
+                refresh();
+                continue; // Redraw with new offset
+            } else if (ch == 'k' && note_scroll_offset > 0) {
+                note_scroll_offset--;
+                refresh();
+                continue; // Redraw with new offset
+            } else {
+                ungetch(ch); // Put character back in input queue
+            }
+        } else {
+            // Note is hidden, no additional action needed
+            // Scroll position is reset in toggle_note_visibility
+        }
         
         // Add a suggestion for the selected task if applicable
         if (disp_count > 0 && selected < disp_count) {
@@ -602,6 +882,12 @@ int main(int argc, char *argv[]) {
                 break;
             case '/': // Search tasks
                 handle_search_tasks(search_term, sizeof(search_term), &selected);
+                break;
+            case 'v': // View/hide note
+                show_note = toggle_note_visibility(disp, disp_count, selected, show_note);
+                break;
+            case 'n': // Add/edit note
+                handle_edit_note(disp, disp_count, selected);
                 break;
             default:
                 break;

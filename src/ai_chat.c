@@ -14,7 +14,7 @@
 #include <time.h>
 #include <unistd.h>    // For sleep (optional, for showing messages)
 
-#define MAX_MSG_LEN 1024 // Increased buffer size
+#define MAX_MSG_LEN 4096 // Increased buffer size
 #define MAX_ERR_LEN 256
 
 // --- Helper functions ---
@@ -40,56 +40,182 @@ static void build_system_prompt(char *prompt_buf, size_t buf_size, Task **tasks,
     size_t remaining_size = buf_size;
     int written;
 
+    // Get current date for the prompt
+    time_t now = time(NULL);
+    struct tm tm_now;
+    gmtime_r(&now, &tm_now);
+    char today_str[20];
+    strftime(today_str, sizeof(today_str), "%Y-%m-%d", &tm_now);
+    
     // Use snprintf for safe concatenation, checking return values
+    // Break up the long string into smaller chunks to avoid compiler warnings
     written = snprintf(ptr, remaining_size,
              "Persona: You are Smartodo, a specialized AI assistant for a command-line todo application.\n"
-             "\n"
+             "\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "Instructions:\n"
              "- Analyze the user request and the current task list.\n"
-             "- Today's date is %s UTC.\n"
+             "- Today's date is %s UTC.\n",
+             today_str);
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "- Output exactly one JSON object: {\"action\": \"ACTION_NAME\", \"params\": {PARAM_DICT}}. No extra text.\n"
-             "- For actions targeting a specific task (mark, delete, edit), use the 'index' parameter, referring to the 1-based index shown in the 'Current Tasks' list.\n"
+             "- For actions targeting a specific task (mark, delete, edit), use the 'index' parameter, referring to the 1-based index shown in the 'Current Tasks' list.\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "- IMPORTANT: Only use task indices that are explicitly shown in the current task list. Do not reference tasks by absolute indices that may have changed.\n"
-             "- To reference the currently selected task (marked with an arrow \u2192 and 'SELECTED' in the list), use the 'selected_task' action.\n"
+             "- To reference the currently selected task (marked with an arrow \u2192 and 'SELECTED' in the list), use the 'selected_task' action.\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "- For project management, you can create or delete projects by name, and assign tasks to a specific project.\n"
              "- Projects can only be deleted if they have no tasks.\n"
              "\n"
-             "Supported Actions & Params:\n"
-             " add_task: { \"name\": string, \"due\": \"YYYY-MM-DD\" | null, \"tags\": [string], \"priority\": \"low\"|\"medium\"|\"high\", \"project\": string }\n"
+             "Supported Actions & Params:\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
+             " add_task: { \"name\": string, \"due\": \"YYYY-MM-DD\" | null, \"tags\": [string], \"priority\": \"low\"|\"medium\"|\"high\", \"project\": string, \"note\": string? }\n"
              " mark_done: { \"index\": number }\n"
-             " delete_task: { \"index\": number }\n"
-             " edit_task: { \"index\": number, \"name\": string?, \"due\": \"YYYY-MM-DD\" | null?, \"tags\": [string]?, \"priority\": string?, \"status\": string? }\n"
-             " selected_task: { \"action\": \"mark_done\" | \"delete_task\" | \"edit_task\", \"params\": {...} } (Apply an action to the currently selected task)\n"
+             " delete_task: { \"index\": number }\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
+             " edit_task: { \"index\": number, \"name\": string?, \"due\": \"YYYY-MM-DD\" | null?, \"tags\": [string]?, \"priority\": string?, \"status\": string?, \"note\": string? }\n"
+             " add_note: { \"index\": number, \"note\": string }\n"
+             " view_note: { \"index\": number }\n"
+             " selected_task: { \"action\": \"mark_done\" | \"delete_task\" | \"edit_task\" | \"add_note\" | \"view_note\", \"params\": {...} } (Apply an action to the currently selected task)\n"
              " add_project: { \"name\": string }\n"
              " delete_project: { \"name\": string } (Only allowed if the project has no tasks)\n"
-             " search_tasks: { \"term\": string | null } (null term clears search)\n"
+             " search_tasks: { \"term\": string | null } (null term clears search)\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              " filter_by_date: { \"range\": \"today\"|\"tomorrow\"|\"this_week\"|\"next_week\"|\"overdue\" } (Filter tasks by date range)\n"
              " filter_by_priority: { \"level\": \"high\"|\"medium\"|\"low\" } (Filter tasks by priority)\n"
-             " filter_by_status: { \"status\": \"done\"|\"pending\" } (Filter tasks by completion status)\n"
+             " filter_by_status: { \"status\": \"done\"|\"pending\" } (Filter tasks by completion status)\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              " filter_combined: { \"filters\": [ {\"type\": \"date\"|\"priority\"|\"status\", \"value\": string}, ... ] } (Apply multiple filters)\n"
              " sort_tasks: { \"by\": \"name\"|\"due\"|\"creation\" }\n"
              " list_tasks: {} (Use this if the user asks to see tasks, effectively clears search)\n"
              " exit: {} (Use this to exit the AI chat mode)\n"
              "\n"
              "Context:\n"
-             "%s" // Task list context added here
              "\n"
-             "Example (Add): User: \"add buy milk tomorrow high prio\" -> {\"action\":\"add_task\",\"params\":{\"name\":\"buy milk\",\"due\":\"YYYY-MM-DD\",\"tags\":[],\"priority\":\"high\"}}\n"
+             "Example (Add): User: \"add buy milk tomorrow high prio\" -> {\"action\":\"add_task\",\"params\":{\"name\":\"buy milk\",\"due\":\"YYYY-MM-DD\",\"tags\":[],\"priority\":\"high\"}}\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
+             "Example (Add with Note): User: \"add buy milk tomorrow with note: get organic milk\" -> {\"action\":\"add_task\",\"params\":{\"name\":\"buy milk\",\"due\":\"YYYY-MM-DD\",\"note\":\"get organic milk\"}}\n"
+             "Example (Add Note): User: \"add a note to task 2: remember to check expiration date\" -> {\"action\":\"add_note\",\"params\":{\"index\":2,\"note\":\"remember to check expiration date\"}}\n"
+             "Example (View Note): User: \"show me the note for task 3\" -> {\"action\":\"view_note\",\"params\":{\"index\":3}}\n"
              "Example (Add Project): User: \"create new project Health\" -> {\"action\":\"add_project\",\"params\":{\"name\":\"Health\"}}\n"
-             "Example (Delete Project): User: \"delete project Health\" -> {\"action\":\"delete_project\",\"params\":{\"name\":\"Health\"}}\n"
+             "Example (Delete Project): User: \"delete project Health\" -> {\"action\":\"delete_project\",\"params\":{\"name\":\"Health\"}}\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "Example (Task in Project): User: \"create a new task Do workout at Gym in project Health\" -> {\"action\":\"add_task\",\"params\":{\"name\":\"Do workout at Gym\",\"project\":\"Health\"}}\n"
-             "Example (Mark): User: \"mark item 2 done\" -> {\"action\":\"mark_done\",\"params\":{\"index\":2}}\n"
+             "Example (Mark): User: \"mark item 2 done\" -> {\"action\":\"mark_done\",\"params\":{\"index\":2}}\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "Example (Edit): User: \"change due date of task 3 to next Friday\" -> {\"action\":\"edit_task\",\"params\":{\"index\":3,\"due\":\"YYYY-MM-DD\"}}\n"
              "Example (Selected): User: \"update the due date of the selected task to tomorrow\" -> {\"action\":\"selected_task\",\"params\":{\"action\":\"edit_task\",\"params\":{\"due\":\"YYYY-MM-DD\"}}}\n"
              "Example (Search): User: \"find tasks related to 'project x'\" -> {\"action\":\"search_tasks\",\"params\":{\"term\":\"project x\"}}\n"
-             "Example (Date Filter): User: \"What tasks are due this week?\" -> {\"action\":\"filter_by_date\",\"params\":{\"range\":\"this_week\"}}\n"
+             "Example (Date Filter): User: \"What tasks are due this week?\" -> {\"action\":\"filter_by_date\",\"params\":{\"range\":\"this_week\"}}\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "Example (Priority Filter): User: \"Show me all high priority tasks\" -> {\"action\":\"filter_by_priority\",\"params\":{\"level\":\"high\"}}\n"
-             "Example (Status Filter): User: \"Show me completed tasks\" -> {\"action\":\"filter_by_status\",\"params\":{\"status\":\"done\"}}\n"
+             "Example (Status Filter): User: \"Show me completed tasks\" -> {\"action\":\"filter_by_status\",\"params\":{\"status\":\"done\"}}\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    written = snprintf(ptr, remaining_size,
              "Example (Combined Filter): User: \"Show me low priority tasks due next week\" -> {\"action\":\"filter_combined\",\"params\":{\"filters\":[{\"type\":\"priority\",\"value\":\"low\"},{\"type\":\"date\",\"value\":\"next_week\"}]}}\n"
              "Example (Clear Search): User: \"show all tasks\" -> {\"action\":\"list_tasks\",\"params\":{}}\n"
              "\n"
-             "Now, process the user's request:\n",
-             "%s", "%s");
+             "Now, process the user's request:\n");
+    if (written < 0 || (size_t)written >= remaining_size) goto end_prompt;
+    ptr += written;
+    remaining_size -= written;
+    
+    // Build task list context string (show index, status, name)
+    char task_context[8192] = "Context:\n"; // Be mindful of prompt size limits
+    size_t context_len = strlen(task_context);
+    
+    if (count == 0) {
+        strcat(task_context, "(No tasks to display)\n");
+    } else {
+        for (size_t i = 0; i < count; ++i) {
+            if (!tasks[i]) continue;
+            
+            char line_buf[512]; // Increased buffer size to accommodate more details
+            char due_str[32] = "no due date";
+            
+            // Format due date if present
+            if (tasks[i]->due > 0) {
+                struct tm tm_due;
+                gmtime_r(&tasks[i]->due, &tm_due);
+                strftime(due_str, sizeof(due_str), "%Y-%m-%d", &tm_due);
+            }
+            
+            // Format priority
+            const char *prio_str = "low";
+            if (tasks[i]->priority == PRIORITY_HIGH) prio_str = "high";
+            else if (tasks[i]->priority == PRIORITY_MEDIUM) prio_str = "medium";
+            
+            // Create the full line with task details
+            snprintf(line_buf, sizeof(line_buf), "%zu: [%c] %s (due: %s, priority: %s)\n",
+                     i + 1, // Display 1-based index to user/LLM
+                     (tasks[i]->status == STATUS_DONE) ? 'x' : ' ',
+                     tasks[i]->name,
+                     due_str,
+                     prio_str);
+            
+            if (context_len + strlen(line_buf) < sizeof(task_context) - 1) {
+                strcat(task_context, line_buf);
+                context_len += strlen(line_buf);
+            } else {
+                strcat(task_context, "(...more tasks truncated...)\n");
+                break; // Avoid buffer overflow
+            }
+        }
+    }
+    
+    // Add the task context to the prompt
+    written = snprintf(ptr, remaining_size, "%s", task_context);
     if (written < 0 || (size_t)written >= remaining_size) goto end_prompt; // Error or truncated
     ptr += written;
     remaining_size -= written;
@@ -518,6 +644,10 @@ int ai_chat_repl(void) {
         } else if (strcmp(action, "list_tasks") == 0) {
             result = handle_list_tasks(search_term, last_error);
             if (result == ACTION_SUCCESS) selected = 0; // Reset selection
+        } else if (strcmp(action, "add_note") == 0) {
+            result = handle_add_note(params, disp, disp_count, last_error);
+        } else if (strcmp(action, "view_note") == 0) {
+            result = handle_view_note(params, disp, disp_count, last_error);
         } else if (strcmp(action, "add_project") == 0) {
             result = handle_add_project(params, &projects, &project_count, &selected_project_idx, 
                                         &current_project, tasks, count, last_error);

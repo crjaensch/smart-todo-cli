@@ -77,6 +77,12 @@ ActionResult handle_delete_project(cJSON *params, char ***projects, size_t *proj
                                   size_t *selected_project_idx, const char **current_project, 
                                   Task **tasks, size_t count, char *last_error);
 
+// Add a note to a task
+ActionResult handle_add_note(cJSON *params, Task **disp, size_t disp_count, char *last_error);
+
+// View a note for a task
+ActionResult handle_view_note(cJSON *params, Task **disp, size_t disp_count, char *last_error);
+
 // Handle exit command
 ActionResult handle_exit(cJSON *params, char *last_error);
 

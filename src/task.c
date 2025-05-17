@@ -59,6 +59,7 @@ Task *task_create(const char *name, time_t due, const char *tags[], size_t tag_c
     t->due = due;
     t->priority = priority;
     t->status = STATUS_PENDING;
+    t->note = NULL; // Initialize note to NULL
 
     t->tag_count = tag_count;
     if (tag_count > 0) {
@@ -111,6 +112,7 @@ void task_free(Task *t) {
     }
     free(t->tags);
     free(t->project);
+    free(t->note); // Free the note if it exists
     free(t);
 }
 
@@ -159,6 +161,13 @@ char *task_to_json(const Task *t) {
     cJSON_AddStringToObject(obj, "priority", priority_to_str(t->priority));
     cJSON_AddStringToObject(obj, "status", status_to_str(t->status));
     cJSON_AddStringToObject(obj, "project", t->project ? t->project : "default");
+    
+    // Add note if it exists, otherwise add null
+    if (t->note) {
+        cJSON_AddStringToObject(obj, "note", t->note);
+    } else {
+        cJSON_AddNullToObject(obj, "note");
+    }
 
     char *json_str = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
@@ -177,6 +186,7 @@ Task *task_from_json(const char *json_str) {
     cJSON *priority = cJSON_GetObjectItem(obj, "priority");
     cJSON *status = cJSON_GetObjectItem(obj, "status");
     cJSON *project = cJSON_GetObjectItem(obj, "project");
+    cJSON *note = cJSON_GetObjectItem(obj, "note"); // Get note if it exists
 
     if (!cJSON_IsString(id) || !cJSON_IsString(name) || !cJSON_IsString(created)
         || !cJSON_IsArray(tags) || !cJSON_IsString(priority) || !cJSON_IsString(status)) {
@@ -278,6 +288,23 @@ Task *task_from_json(const char *json_str) {
         free(t);
         cJSON_Delete(obj);
         return NULL;
+    }
+
+    // Handle note field
+    if (note && cJSON_IsString(note)) {
+        t->note = utils_strdup(note->valuestring);
+        if (!t->note) {
+            // cleanup memory
+            free(t->project);
+            free(t->name); free(t->id);
+            for (size_t i = 0; i < t->tag_count; ++i) free(t->tags[i]);
+            free(t->tags);
+            free(t);
+            cJSON_Delete(obj);
+            return NULL;
+        }
+    } else {
+        t->note = NULL; // No note or null note
     }
 
     cJSON_Delete(obj);
@@ -467,55 +494,75 @@ static bool task_matches_filter(const Task *t, const char *filter) {
 }
 
 bool task_matches_search(const Task *t, const char *search_term) {
-    if (!t || !search_term || search_term[0] == '\0') return false;
-    
-    // Special handling for filter search terms
-    if (search_term[0] == '[') {
-        // Check if this is a combined filter with format [filter1][filter2]...
-        if (strchr(search_term, ']') && strchr(search_term, ']') + 1 < search_term + strlen(search_term) && *(strchr(search_term, ']') + 1) == '[') {
-            // This is a combined filter
-            char filter_copy[256];
-            strncpy(filter_copy, search_term, sizeof(filter_copy) - 1);
-            filter_copy[sizeof(filter_copy) - 1] = '\0';
-            
-            char *filter_start = filter_copy;
-            bool match_all = true;
-            
-            while (filter_start && *filter_start) {
-                // Extract individual filter
-                if (*filter_start != '[') break;
-                
-                char *filter_end = strchr(filter_start, ']');
-                if (!filter_end) break;
-                
-                *filter_end = '\0'; // Terminate the filter string
-                char *filter = filter_start + 1; // Skip the '['
-                
-                // Check if task matches this filter
-                if (!task_matches_filter(t, filter)) {
-                    match_all = false;
-                    break;
-                }
-                
-                // Move to next filter
-                filter_start = filter_end + 1;
-            }
-            
-            return match_all;
-        }
-        // Single filter in format [filter]
-        else {
-            // Extract filter without brackets
-            char filter[256];
-            size_t len = strlen(search_term);
-            if (len >= 3 && search_term[len-1] == ']') {
-                strncpy(filter, search_term + 1, len - 2);
-                filter[len - 2] = '\0';
-                return task_matches_filter(t, filter);
-            }
+    if (!t || !search_term || search_term[0] == '\0') {
+        return true; // Empty search matches everything
+    }
+
+    // Check if search term is a filter
+    if (task_matches_filter(t, search_term)) {
+        return true;
+    }
+
+    // Check name
+    if (t->name && strcasestr(t->name, search_term)) {
+        return true;
+    }
+
+    // Check tags
+    for (size_t i = 0; i < t->tag_count; ++i) {
+        if (t->tags[i] && strcasestr(t->tags[i], search_term)) {
+            return true;
         }
     }
+
+    // Check project
+    if (t->project && strcasestr(t->project, search_term)) {
+        return true;
+    }
+
+    // Check note
+    if (t->note && strcasestr(t->note, search_term)) {
+        return true;
+    }
+
+    return false;
+}
     
-    // Regular search - check name and tags
-    return task_matches_filter(t, search_term);
+/**
+ * Set a note for a task.
+ * @param task The task to set the note for
+ * @param note The note text (will be copied)
+ * @return 0 on success, -1 on error
+ */
+int task_set_note(Task *task, const char *note) {
+    if (!task) return -1;
+    
+    // Free existing note if any
+    if (task->note) {
+        free(task->note);
+        task->note = NULL;
+    }
+    
+    // If note is NULL or empty, just leave the note as NULL
+    if (!note || note[0] == '\0') {
+        return 0;
+    }
+    
+    // Copy the note
+    task->note = utils_strdup(note);
+    if (!task->note) {
+        return -1; // Memory allocation failed
+    }
+    
+    return 0;
+}
+
+/**
+ * Get the note for a task.
+ * @param task The task to get the note from
+ * @return The note text or NULL if no note exists
+ */
+const char *task_get_note(const Task *task) {
+    if (!task) return NULL;
+    return task->note;
 }
