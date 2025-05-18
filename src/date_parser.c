@@ -290,6 +290,14 @@ static bool parse_time(const char *input, struct tm *tm) {
     tm->tm_hour = (int)hours;
     tm->tm_sec = 0;
     
+    // Skip any remaining whitespace
+    skip_whitespace(&p);
+    
+    // If we haven't reached the end of the string, it's invalid
+    if (*p != '\0') {
+        return false;
+    }
+    
     return true;
 }
 
