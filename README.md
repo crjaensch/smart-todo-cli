@@ -13,7 +13,7 @@ Want more in-depth technical information about smart-todo-tui? Visit [![Ask Deep
 The standard mode provides an interactive terminal interface for managing your tasks:
 
 - Create, edit, and delete tasks
-- Add notes to tasks for additional context and information
+- Add notes to tasks for additional context and information with an improved TUI editor
 - Set due dates, priorities, and tags
 - Sort tasks by name, creation date, or due date
 - Filter tasks by status, tags, or search terms
@@ -126,6 +126,13 @@ export OPENAI_API_KEY="your-api-key-here"
 
 - Tasks are stored in `$HOME/.todo-app/tasks.json`.
 - Project names are stored in `$HOME/.todo-app/projects.json`.
+
+## Recent Updates
+
+### May 2025
+- Improved note editor with better text positioning and character counter
+- Enhanced UI documentation for better code maintainability
+- Fixed visual issues with box borders in popup windows
 
 ## License
 
