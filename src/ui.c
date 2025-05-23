@@ -178,14 +178,14 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
             
             // Print note icon (if present)
             if (t->note && t->note[0] != '\0') {
-                mvprintw(y, offsetx + 26, "📝");  // Note icon
+                mvprintw(y, offsetx + 25, "(N)");
             } else {
-                mvprintw(y, offsetx + 26, " ");  // Space when no note
+                mvprintw(y, offsetx + 25, "   ");
             }
             
             // Print task name with color
             attron(COLOR_PAIR(cp));
-            mvprintw(y, offsetx + 28, "%s", t->name);
+            mvprintw(y, offsetx + 29, "%s", t->name);
             attroff(COLOR_PAIR(cp));
             
             attroff(A_BOLD);
@@ -224,16 +224,16 @@ void ui_draw_tasks(Task **tasks, size_t count, size_t selected) {
             
             // Print note icon (if present)
             if (t->note && t->note[0] != '\0') {
-                mvprintw(y, offsetx + 26, "📝");  // Note icon
+                mvprintw(y, offsetx + 25, "(N)");
             } else {
-                mvprintw(y, offsetx + 26, " ");  // Space when no note
+                mvprintw(y, offsetx + 25, "   ");
             }
             
             // Print task name
             if (t->status != STATUS_DONE) {
                 attron(COLOR_PAIR(cp));
             }
-            mvprintw(y, offsetx + 28, "%s", t->name);
+            mvprintw(y, offsetx + 29, "%s", t->name);
             if (t->status != STATUS_DONE) {
                 attroff(COLOR_PAIR(cp));
             }
